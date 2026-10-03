@@ -1,24 +1,35 @@
+import { WEAPONS, fullAmmo, validWeapon, type WeaponId } from "./weapons";
+import { createArena, type Arena, type Vec3 } from "./arena";
+import {
+  BODY_HEIGHT,
+  EYE_HEIGHT,
+  RADIUS,
+  SPEED,
+  moveBody,
+  distance,
+  direction,
+  rayBox,
+  rayWorld,
+  visible,
+  bodyBlocked,
+  supportHeight,
+  type Body,
+} from "./physics";
+import { Navigation, type Waypoint } from "./navigation";
+export { WIDTH, DEPTH } from "./arena";
+export { RADIUS, SPEED } from "./physics";
+export const PROTOCOL = 3;
 export const TEAMS = [
   { name: "EMBER", color: "#ff765e", letter: "E" },
   { name: "TIDAL", color: "#5bbaff", letter: "T" },
   { name: "JADE", color: "#70e1b0", letter: "J" },
   { name: "VOLT", color: "#e6cb66", letter: "V" },
 ] as const;
-export const WIDTH = 2400,
-  HEIGHT = 1600,
-  RADIUS = 17;
 export const ROUND_MS = 90_000,
-  BREAK_MS = 5_000,
-  RESPAWN_MS = 3_000;
-export const SPEED = 240,
+  BREAK_MS = 5000,
+  RESPAWN_MS = 3000,
   BULLET_SPEED = 820,
-  FIRE_MS = 220;
-export interface Wall {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+  FIRE_MS = 150;
 export const POWER_TYPES = [
   "double",
   "laser",
@@ -29,77 +40,70 @@ export const POWER_TYPES = [
 export type Power = (typeof POWER_TYPES)[number];
 export const POWER_INFO: Record<
   Power,
-  { label: string; icon: string; color: string }
+  { label: string; icon: string; color: string; duration: number }
 > = {
-  double: { label: "DOUBLE SHOT", icon: "2X", color: "#ffc76b" },
-  laser: { label: "RICOCHET LASER", icon: "LASER", color: "#bb8cff" },
-  rapid: { label: "RAPID FIRE", icon: "RAPID", color: "#ff809d" },
-  speed: { label: "SPEED BOOST", icon: "FAST", color: "#70e1b0" },
-  shield: { label: "SHIELD", icon: "SHIELD", color: "#69cfff" },
+  double: {
+    label: "DOUBLE SHOT",
+    icon: "2X",
+    color: "#ffc76b",
+    duration: 4000,
+  },
+  laser: {
+    label: "RICOCHET LASER",
+    icon: "LASER",
+    color: "#bb8cff",
+    duration: 3000,
+  },
+  rapid: {
+    label: "RAPID FIRE",
+    icon: "RAPID",
+    color: "#ff809d",
+    duration: 4000,
+  },
+  speed: {
+    label: "SPEED BOOST",
+    icon: "FAST",
+    color: "#70e1b0",
+    duration: 5000,
+  },
+  shield: { label: "SHIELD", icon: "SHIELD", color: "#69cfff", duration: 2000 },
 };
-export function movementSpeed(p: Player, now: number) {
-  return SPEED * (p.power === "speed" && p.powerUntil > now ? 1.5 : 1);
-}
-export interface Pickup {
-  id: number;
-  x: number;
-  y: number;
-  kind: Power;
-  readyAt: number;
-}
-export interface Beam {
-  id: number;
-  team: number;
-  x: number;
-  y: number;
-  endX: number;
-  endY: number;
-  until: number;
-}
-export const POWER_MS = 3000;
-export function generateMap(random: () => number): Wall[] {
-  const walls: Wall[] = [];
-  // Mirrored cover keeps all four team starts fair. Cell borders stay open.
-  for (let col = 0; col < 3; col++)
-    for (let row = 0; row < 2; row++) {
-      if (col === 0 && row === 0) continue;
-      const horizontal = random() > 0.5;
-      const w = horizontal ? 150 + random() * 75 : 65 + random() * 35;
-      const h = horizontal ? 65 + random() * 35 : 150 + random() * 75;
-      const x = col * 400 + 70 + random() * (260 - w);
-      const y = row * 400 + 70 + random() * (260 - h);
-      for (const mx of [false, true])
-        for (const my of [false, true])
-          walls.push({
-            x: mx ? WIDTH - x - w : x,
-            y: my ? HEIGHT - y - h : y,
-            w,
-            h,
-          });
-    }
-  return walls;
-}
-const SPAWNS = [
-  { x: 100, y: 100 },
-  { x: WIDTH - 100, y: 100 },
-  { x: 100, y: HEIGHT - 100 },
-  { x: WIDTH - 100, y: HEIGHT - 100 },
-];
 export interface Input {
+  seq: number;
   x: number;
-  y: number;
+  z: number;
   aim: number;
+  pitch: number;
   fire: boolean;
+  jump: number;
+  dash: number;
+  use: number;
+  swap: number;
+  reload: number;
+  weapon: WeaponId;
 }
-export interface Player {
+export const idleInput = (): Input => ({
+  seq: 0,
+  x: 0,
+  z: 0,
+  aim: 0,
+  pitch: 0,
+  fire: false,
+  jump: 0,
+  dash: 0,
+  use: 0,
+  swap: 0,
+  reload: 0,
+  weapon: "rifle",
+});
+export interface Player extends Body {
   id: string;
   name: string;
   team: number;
   slot: number;
   bot: boolean;
-  x: number;
-  y: number;
   aim: number;
+  pitch: number;
   hp: number;
   score: number;
   kills: number;
@@ -109,17 +113,47 @@ export interface Player {
   nextShot: number;
   power: Power | null;
   powerUntil: number;
+  storedPower: Power | null;
+  ack: number;
+  actions: {
+    jump: number;
+    dash: number;
+    use: number;
+    swap: number;
+    reload: number;
+  };
+  weapon: WeaponId;
+  ammo: Record<WeaponId, number>;
+  reloadUntil: number;
+  switchUntil: number;
+  life: number;
 }
-export interface Bullet {
+export interface Pickup extends Vec3 {
+  id: number;
+  kind: Power;
+  readyAt: number;
+}
+export interface Bullet extends Vec3 {
   id: number;
   owner: string;
   team: number;
-  bot: boolean;
-  x: number;
-  y: number;
   vx: number;
   vy: number;
+  vz: number;
   ttl: number;
+  damage: number;
+  weapon: WeaponId;
+  shotId: number;
+}
+export interface Beam {
+  id: number;
+  owner: string;
+  shotId: number;
+  segment: number;
+  team: number;
+  start: Vec3;
+  end: Vec3;
+  until: number;
 }
 export interface Feed {
   id: number;
@@ -129,19 +163,49 @@ export interface Feed {
   points: number;
   time: number;
 }
+export type EventKind =
+  | "shot"
+  | "laser"
+  | "hit"
+  | "kill"
+  | "pickup"
+  | "use"
+  | "dash"
+  | "jump"
+  | "land"
+  | "step"
+  | "round"
+  | "reload"
+  | "empty"
+  | "block"
+  | "switch";
+export interface GameEvent extends Vec3 {
+  id: number;
+  kind: EventKind;
+  time: number;
+  actor: string;
+  target?: string;
+  team: number;
+  power?: Power;
+  source?: Vec3;
+  weapon?: WeaponId;
+  mode?: "normal" | "double" | "laser";
+  shotId?: number;
+}
 export type Phase = "playing" | "intermission" | "finished";
 export interface Snapshot {
-  walls: Wall[];
-  pickups: Pickup[];
-  beams: Beam[];
+  protocol: number;
   now: number;
   round: number;
   phase: Phase;
   endsAt: number;
   players: Player[];
+  pickups: Pickup[];
   bullets: Bullet[];
+  beams: Beam[];
   scores: number[];
   feed: Feed[];
+  events: GameEvent[];
 }
 export interface RoomInfo {
   code: string;
@@ -154,155 +218,119 @@ export interface RoomInfo {
   updatedAt: number;
 }
 export type ClientMessage =
-  | { type: "join"; name: string; team: number }
+  | { type: "join"; name: string; team: number; protocol: number }
   | { type: "input"; input: Input }
   | { type: "rematch" };
 export type ServerMessage =
-  | { type: "welcome"; id: string; code: string }
+  | {
+      type: "welcome";
+      id: string;
+      code: string;
+      protocol: number;
+      arena: Arena;
+    }
   | { type: "state"; state: Snapshot }
   | { type: "error"; message: string };
-export function validName(value: unknown): value is string {
-  return (
-    typeof value === "string" && /^[A-Za-z0-9 _-]{1,16}$/.test(value.trim())
-  );
+export function validName(v: unknown): v is string {
+  return typeof v === "string" && /^[A-Za-z0-9 _-]{1,16}$/.test(v.trim());
 }
-export function validInput(i: unknown): i is Input {
-  if (!i || typeof i !== "object") return false;
-  const v = i as Input;
+export function validInput(v: unknown): v is Input {
+  if (!v || typeof v !== "object") return false;
+  const i = v as Input;
   return (
-    [v.x, v.y, v.aim].every(Number.isFinite) &&
-    Math.abs(v.x) <= 1 &&
-    Math.abs(v.y) <= 1 &&
-    Math.abs(v.aim) <= Math.PI * 4 &&
-    typeof v.fire === "boolean"
-  );
-}
-export function blocked(
-  x: number,
-  y: number,
-  radius = RADIUS,
-  walls: Wall[] = [],
-) {
-  return (
-    x < radius ||
-    y < radius ||
-    x > WIDTH - radius ||
-    y > HEIGHT - radius ||
-    walls.some(
-      (w) =>
-        x + radius > w.x &&
-        x - radius < w.x + w.w &&
-        y + radius > w.y &&
-        y - radius < w.y + w.h,
+    [i.x, i.z, i.aim, i.pitch].every(Number.isFinite) &&
+    Math.abs(i.x) <= 1 &&
+    Math.abs(i.z) <= 1 &&
+    Math.abs(i.aim) <= Math.PI * 4 &&
+    Math.abs(i.pitch) <= Math.PI / 2 &&
+    typeof i.fire === "boolean" &&
+    validWeapon(i.weapon) &&
+    [i.seq, i.jump, i.dash, i.use, i.swap, i.reload].every(
+      (n) => Number.isSafeInteger(n) && n >= 0,
     )
   );
 }
-export function lineBlocked(
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-  walls: Wall[] = [],
-) {
-  const n = Math.ceil(Math.hypot(bx - ax, by - ay) / 8);
-  for (let s = 0; s <= n; s++)
-    if (
-      blocked(
-        ax + ((bx - ax) * s) / Math.max(1, n),
-        ay + ((by - ay) * s) / Math.max(1, n),
-        2,
-        walls,
-      )
-    )
-      return true;
-  return false;
+export function movementSpeed(p: Player, now: number) {
+  return SPEED * (p.power === "speed" && p.powerUntil > now ? 1.5 : 1);
 }
+let defaultNavigation: Navigation | undefined;
 export class Game {
-  walls: Wall[];
-  pickups: Pickup[] = [];
-  beams: Beam[] = [];
+  arena = createArena();
+  navigation: Navigation;
   players: Player[] = [];
+  pickups: Pickup[] = [];
   bullets: Bullet[] = [];
+  beams: Beam[] = [];
+  events: GameEvent[] = [];
   scores = [0, 0, 0, 0];
   feed: Feed[] = [];
   round = 1;
   phase: Phase = "playing";
   now = 0;
   endsAt = ROUND_MS;
+  private serial = 0;
   private inputs = new Map<string, { input: Input; at: number }>();
   private shotPresses = new Set<string>();
-  private serial = 0;
+  private bots = new Map<
+    string,
+    { path: Waypoint[]; nextPath: number; seq: number }
+  >();
+  private steps = new Map<string, number>();
   constructor(private random: () => number = Math.random) {
-    this.walls = generateMap(random);
-    this.resetPickups();
+    this.navigation = defaultNavigation ??= new Navigation(this.arena);
     for (let i = 0; i < 8; i++) this.players.push(this.makeBot(i));
+    this.resetPickups();
   }
-  private resetPickups() {
-    this.pickups = [];
-    const kinds: Power[] = [...POWER_TYPES];
-    for (let i = kinds.length - 1; i > 0; i--) {
-      const j = Math.floor(this.random() * (i + 1));
-      [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
-    }
-    for (let id = 0; id < 7; id++) {
-      const pickup: Pickup = {
-        id,
-        x: -1000,
-        y: -1000,
-        kind: kinds[id] ?? this.randomPower(),
-        readyAt: 0,
-      };
-      this.placePickup(pickup);
-      this.pickups.push(pickup);
-    }
-    this.beams = [];
-  }
-  private randomPower(): Power {
-    return POWER_TYPES[Math.floor(this.random() * POWER_TYPES.length)];
-  }
-  private placePickup(pickup: Pickup) {
-    const spots: { x: number; y: number }[] = [];
-    for (let x = 200; x <= WIDTH - 200; x += 100)
-      for (let y = 200; y <= HEIGHT - 200; y += 100) {
-        if (blocked(x, y, 48, this.walls)) continue;
-        if (SPAWNS.some((s) => Math.hypot(s.x - x, s.y - y) < 250)) continue;
-        if (Math.hypot(pickup.x - x, pickup.y - y) < 200) continue;
-        if (
-          this.pickups.some(
-            (p) =>
-              p.id !== pickup.id &&
-              p.readyAt === 0 &&
-              Math.hypot(p.x - x, p.y - y) < 200,
-          )
-        )
-          continue;
-        if (
-          this.players.some(
-            (p) => p.hp > 0 && Math.hypot(p.x - x, p.y - y) < 90,
-          )
-        )
-          continue;
-        spots.push({ x, y });
-      }
-    if (!spots.length) {
-      pickup.readyAt = this.now + 1000;
-      return;
-    }
-    const spot = spots[Math.floor(this.random() * spots.length)];
-    pickup.x = spot.x;
-    pickup.y = spot.y;
-    pickup.readyAt = 0;
+  private emit(
+    kind: EventKind,
+    p: Player,
+    target?: string,
+    power?: Power,
+    source?: Vec3,
+  ) {
+    this.events.push({
+      id: ++this.serial,
+      kind,
+      time: this.now,
+      actor: p.id,
+      target,
+      team: p.team,
+      x: p.x,
+      y: p.y + EYE_HEIGHT,
+      z: p.z,
+      power,
+      source,
+      weapon: p.weapon,
+    });
+    return this.events[this.events.length - 1];
   }
   private spawn(p: Player) {
-    const s = SPAWNS[p.team];
-    p.x = s.x + (p.slot % 2 ? (s.x < WIDTH / 2 ? 48 : -48) : 0);
-    p.y = s.y;
-    p.hp = 100;
-    p.respawnAt = 0;
-    p.shieldUntil = this.now + 1000;
-    p.nextShot = this.now + 350;
-    p.power = null;
-    p.powerUntil = 0;
+    const s = this.arena.spawns[p.team];
+    Object.assign(p, {
+      ...s,
+      x: s.x + (p.slot % 2 ? (p.team % 2 ? -48 : 48) : 0),
+      vy: 0,
+      grounded: true,
+      hp: 100,
+      respawnAt: 0,
+      shieldUntil: this.now + 1000,
+      nextShot: this.now + 350,
+      weapon: "rifle",
+      ammo: fullAmmo(),
+      reloadUntil: 0,
+      switchUntil: 0,
+      life: p.life + 1,
+      power: null,
+      powerUntil: 0,
+      storedPower: null,
+      dashUntil: 0,
+      dashReadyAt: 0,
+      dashX: 0,
+      dashZ: 0,
+    });
+    this.inputs.delete(p.id);
+    this.shotPresses.delete(p.id);
+    this.bots.delete(p.id);
   }
   private makeBot(slot: number): Player {
     const p: Player = {
@@ -313,7 +341,11 @@ export class Game {
       bot: true,
       x: 0,
       y: 0,
+      z: 0,
+      vy: 0,
+      grounded: true,
       aim: 0,
+      pitch: 0,
       hp: 100,
       score: 0,
       kills: 0,
@@ -323,6 +355,18 @@ export class Game {
       nextShot: 0,
       power: null,
       powerUntil: 0,
+      storedPower: null,
+      dashUntil: 0,
+      dashReadyAt: 0,
+      dashX: 0,
+      dashZ: 0,
+      ack: 0,
+      actions: { jump: 0, dash: 0, use: 0, swap: 0, reload: 0 },
+      weapon: "rifle",
+      ammo: fullAmmo(),
+      reloadUntil: 0,
+      switchUntil: 0,
+      life: 0,
     };
     this.spawn(p);
     return p;
@@ -339,27 +383,33 @@ export class Game {
     const index = this.players.findIndex((p) => p.team === team && p.bot);
     if (index < 0) throw new Error("This team is full. Choose another team.");
     const p = this.makeBot(index);
+    this.bullets = this.bullets.filter((b) => b.owner !== p.id);
     p.id = id;
     p.name = name.trim();
     p.bot = false;
+    p.aim = Math.atan2(800 - p.z, 1200 - p.x);
     this.players[index] = p;
-    this.bullets = this.bullets.filter((b) => b.owner !== `bot-${index}`);
     return p;
   }
   removeHuman(id: string) {
-    const index = this.players.findIndex((p) => p.id === id && !p.bot);
-    if (index >= 0) this.players[index] = this.makeBot(index);
+    const i = this.players.findIndex((p) => p.id === id && !p.bot);
+    if (i >= 0) this.players[i] = this.makeBot(i);
     this.inputs.delete(id);
     this.shotPresses.delete(id);
     this.bullets = this.bullets.filter((b) => b.owner !== id);
   }
   setInput(id: string, input: Input) {
-    if (validInput(input)) {
-      // Preserve a short click that starts and ends between simulation ticks.
-      if (input.fire && !this.inputs.get(id)?.input.fire)
-        this.shotPresses.add(id);
-      this.inputs.set(id, { input, at: this.now });
-    }
+    const p = this.players.find((p) => p.id === id && !p.bot);
+    if (
+      !p ||
+      !validInput(input) ||
+      input.seq <= Math.max(p.ack, this.inputs.get(id)?.input.seq ?? -1)
+    )
+      return;
+    const old = this.inputs.get(id)?.input;
+    if (input.fire && !old?.fire && p.hp > 0 && this.phase === "playing")
+      this.shotPresses.add(id);
+    this.inputs.set(id, { input: { ...input }, at: this.now });
   }
   get humans() {
     return this.players.filter((p) => !p.bot).length;
@@ -368,12 +418,12 @@ export class Game {
     return {
       code,
       humans: this.humans,
-      members: this.players
-        .filter((p) => !p.bot)
-        .map((p) => ({ name: p.name, team: p.team })),
       teams: TEAMS.map(
         (_, t) => this.players.filter((p) => !p.bot && p.team === t).length,
       ),
+      members: this.players
+        .filter((p) => !p.bot)
+        .map((p) => ({ name: p.name, team: p.team })),
       round: this.round,
       phase: this.phase,
       scores: [...this.scores],
@@ -382,18 +432,65 @@ export class Game {
   }
   snapshot(): Snapshot {
     return {
-      walls: this.walls.map((w) => ({ ...w })),
-      pickups: this.pickups.map((p) => ({ ...p })),
-      beams: this.beams.map((b) => ({ ...b })),
+      protocol: PROTOCOL,
       now: this.now,
       round: this.round,
       phase: this.phase,
       endsAt: this.endsAt,
-      players: this.players.map((p) => ({ ...p })),
+      players: this.players.map((p) => ({
+        ...p,
+        actions: { ...p.actions },
+        ammo: { ...p.ammo },
+      })),
+      pickups: this.pickups.map((p) => ({ ...p })),
       bullets: this.bullets.map((b) => ({ ...b })),
+      beams: this.beams.map((b) => ({ ...b })),
       scores: [...this.scores],
-      feed: this.feed.map((f) => ({ ...f })),
+      feed: [...this.feed],
+      events: [...this.events],
     };
+  }
+  private randomPower() {
+    return POWER_TYPES[Math.floor(this.random() * POWER_TYPES.length)];
+  }
+  private placePickup(p: Pickup) {
+    const spots = this.arena.supplies.filter(
+      (s) =>
+        !bodyBlocked(this.arena, s.x, s.y, s.z, 36) &&
+        this.arena.spawns.every((v) => distance(v, s) > 250) &&
+        this.pickups.every(
+          (v) => v.id === p.id || v.readyAt !== 0 || distance(v, s) >= 130,
+        ) &&
+        this.players.every((v) => v.hp <= 0 || distance(v, s) > 90) &&
+        distance(p, s) > 100,
+    );
+    if (!spots.length) {
+      p.readyAt = this.now + 1000;
+      return;
+    }
+    Object.assign(p, spots[Math.floor(this.random() * spots.length)]);
+    p.readyAt = 0;
+  }
+  private resetPickups() {
+    this.pickups = [];
+    const kinds = [...POWER_TYPES];
+    for (let i = kinds.length - 1; i > 0; i--) {
+      const j = Math.floor(this.random() * (i + 1));
+      [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+    }
+    for (let id = 0; id < 7; id++) {
+      const p: Pickup = {
+        id,
+        x: -1000,
+        y: 0,
+        z: -1000,
+        kind: kinds[id] ?? this.randomPower(),
+        readyAt: 0,
+      };
+      this.placePickup(p);
+      this.pickups.push(p);
+    }
+    this.beams = [];
   }
   rematch() {
     if (this.phase !== "finished") return;
@@ -403,100 +500,313 @@ export class Game {
     this.scores = [0, 0, 0, 0];
     this.feed = [];
     this.bullets = [];
-    this.walls = generateMap(this.random);
+    this.events = [];
     this.resetPickups();
-    this.inputs.clear();
-    this.shotPresses.clear();
     for (const p of this.players) {
-      p.score = 0;
-      p.kills = 0;
-      p.deaths = 0;
+      p.score = p.kills = p.deaths = 0;
       this.spawn(p);
     }
+    this.emit("round", this.players[0]);
   }
   private botInput(p: Player): Input {
+    let brain = this.bots.get(p.id);
+    if (!brain) {
+      brain = { path: [], nextPath: 0, seq: p.ack };
+      this.bots.set(p.id, brain);
+    }
+    const eye = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
     const enemies = this.players
       .filter((q) => q.team !== p.team && q.hp > 0)
-      .sort(
-        (a, b) =>
-          Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y),
-      );
+      .sort((a, b) => distance(a, p) - distance(b, p));
     const target =
-      enemies.find((q) => !lineBlocked(p.x, p.y, q.x, q.y, this.walls)) ??
-      enemies[0];
-    if (!target) return { x: 0, y: 0, aim: p.aim, fire: false };
-    const dx = target.x - p.x,
-      dy = target.y - p.y,
-      d = Math.hypot(dx, dy),
-      angle = Math.atan2(dy, dx);
-    const clear = !lineBlocked(p.x, p.y, target.x, target.y, this.walls);
-    let move = angle;
-    if (clear && d < 380) move += (Math.PI / 2) * (p.slot % 2 ? 1 : -1);
-    const offsets = [
-      0,
-      0.6,
-      -0.6,
-      1.2,
-      -1.2,
-      Math.PI / 2,
-      -Math.PI / 2,
-      Math.PI,
-    ];
-    const chosen = offsets.find(
-      (a) =>
-        !blocked(
-          p.x + Math.cos(move + a) * 65,
-          p.y + Math.sin(move + a) * 65,
-          RADIUS,
-          this.walls,
-        ),
-    );
-    move += chosen ?? Math.PI;
-    return {
-      x: Math.cos(move) * 0.72,
-      y: Math.sin(move) * 0.72,
-      aim: angle + Math.sin(this.now / 240 + p.slot) * 0.16,
-      fire: clear && d < 650 && this.random() > 0.18,
+      enemies.find((q) =>
+        visible(this.arena, eye, { x: q.x, y: q.y + 35, z: q.z }),
+      ) ?? enemies[0];
+    const i: Input = {
+      ...idleInput(),
+      ...p.actions,
+      seq: ++brain.seq,
+      aim: p.aim,
+      pitch: p.pitch,
+      weapon: p.weapon,
     };
-  }
-  // The server owns this check, so clients cannot award points or damage teammates.
-  hit(victim: Player, bullet: Pick<Bullet, "owner" | "team" | "bot">) {
+    if (!target) return i;
+    const clear = visible(this.arena, eye, {
+      x: target.x,
+      y: target.y + 35,
+      z: target.z,
+    });
+    const d = distance(target, p);
+    if (clear && this.now >= p.switchUntil && !p.reloadUntil) {
+      i.weapon = d < 150 ? "shotgun" : d < 450 ? "smg" : "rifle";
+      if (p.ammo[i.weapon] === 0) i.reload++;
+    }
+    if (this.now >= brain.nextPath || !brain.path.length) {
+      brain.nextPath = this.now + 1200;
+      let goal: Vec3 = target;
+      if (!p.storedPower) {
+        const supply = this.pickups
+          .filter((q) => !q.readyAt)
+          .sort((a, b) => distance(a, p) - distance(b, p))[0];
+        if (supply) goal = supply;
+      }
+      if (p.hp <= 25 && clear) goal = this.arena.spawns[p.team];
+      brain.path = this.navigation.path(p, goal);
+    }
+    while (brain.path.length && distance(p, brain.path[0]) < 10)
+      brain.path.shift();
+    const next = brain.path[0];
+    if (next) {
+      const len = Math.hypot(next.x - p.x, next.z - p.z);
+      i.x = ((next.x - p.x) / Math.max(1, len)) * 0.8;
+      i.z = ((next.z - p.z) / Math.max(1, len)) * 0.8;
+      if (next.jump && p.grounded) i.jump++;
+    }
+    if (clear && d < 300 && Math.abs(p.y - target.y) < 5) {
+      const angle =
+        Math.atan2(target.z - p.z, target.x - p.x) +
+        ((p.slot % 2 ? 1 : -1) * Math.PI) / 2;
+      const x = p.x + Math.cos(angle) * 45,
+        z = p.z + Math.sin(angle) * 45;
+      if (
+        !bodyBlocked(this.arena, x, p.y, z) &&
+        Math.abs(supportHeight(this.arena, x, z, p.y + 8, RADIUS) - p.y) <= 8
+      ) {
+        i.x = Math.cos(angle) * 0.65;
+        i.z = Math.sin(angle) * 0.65;
+      }
+    }
+    i.aim =
+      Math.atan2(target.z - p.z, target.x - p.x) +
+      Math.sin(this.now / 300 + p.slot) * 0.06;
+    i.pitch = Math.atan2(
+      target.y + 35 - eye.y,
+      Math.hypot(target.x - p.x, target.z - p.z),
+    );
+    i.fire = clear && d < 680 && this.random() > 0.18;
     if (
-      victim.hp <= 0 ||
-      victim.team === bullet.team ||
-      this.now < victim.shieldUntil ||
-      (victim.power === "shield" && this.now < victim.powerUntil) ||
-      this.phase !== "playing"
+      p.storedPower &&
+      !p.power &&
+      ((p.storedPower === "shield" && p.hp < 65) ||
+        (p.storedPower === "speed" && !!next) ||
+        (clear && d < 650))
     )
-      return;
-    victim.hp = Math.max(0, victim.hp - 25);
-    if (victim.hp > 0) return;
+      i.use++;
+    if (
+      p.grounded &&
+      this.now >= p.dashReadyAt &&
+      ((p.hp < 50 && clear) || (!clear && next && distance(p, next) > 150))
+    )
+      i.dash++;
+    return i;
+  }
+  hit(
+    victim: Player,
+    shot: { owner: string; team: number; damage?: number },
+    source?: Vec3,
+  ) {
+    if (victim.hp <= 0 || victim.team === shot.team || this.phase !== "playing")
+      return false;
+    if (
+      this.now < victim.shieldUntil ||
+      (victim.power === "shield" && this.now < victim.powerUntil)
+    ) {
+      this.emit("block", victim, shot.owner, victim.power ?? undefined, source);
+      return false;
+    }
+    const killer = this.players.find((p) => p.id === shot.owner);
+    victim.hp = Math.max(0, victim.hp - (shot.damage ?? 25));
+    if (killer)
+      this.emit(
+        "hit",
+        victim,
+        killer.id,
+        undefined,
+        source ?? { x: killer.x, y: killer.y + EYE_HEIGHT, z: killer.z },
+      );
+    if (victim.hp > 0) return true;
     victim.deaths++;
     victim.respawnAt = this.now + RESPAWN_MS;
-    const killer = this.players.find((p) => p.id === bullet.owner);
-    const points = bullet.bot ? 0 : victim.bot ? 1 : 4;
+    victim.power = null;
+    victim.storedPower = null;
+    victim.powerUntil = 0;
+    victim.dashUntil = 0;
+    victim.reloadUntil = victim.switchUntil = 0;
+    this.shotPresses.delete(victim.id);
     if (killer) {
       killer.kills++;
-      killer.score += points;
-      this.scores[killer.team] += points;
+      killer.score++;
+      this.scores[killer.team]++;
+      this.emit("kill", victim, killer.id);
     }
     this.feed.unshift({
       id: ++this.serial,
       killer: killer?.name ?? "ROBOT",
       victim: victim.name,
-      team: bullet.team,
-      points,
+      team: shot.team,
+      points: killer ? 1 : 0,
       time: this.now,
     });
     this.feed = this.feed.slice(0, 5);
+    return true;
+  }
+  private nearestVictim(
+    o: Vec3,
+    d: Vec3,
+    limit: number,
+    team: number,
+    ignore = new Set<string>(),
+  ) {
+    let result: { p: Player; distance: number } | undefined;
+    for (const p of this.players) {
+      if (p.hp <= 0 || p.team === team || ignore.has(p.id)) continue;
+      const hit = rayBox(
+        o,
+        d,
+        {
+          x: p.x - RADIUS,
+          y: p.y,
+          z: p.z - RADIUS,
+          w: RADIUS * 2,
+          h: BODY_HEIGHT,
+          d: RADIUS * 2,
+        },
+        limit,
+      );
+      if (hit && (!result || hit.distance < result.distance))
+        result = { p, distance: hit.distance };
+    }
+    return result;
+  }
+  private reload(p: Player) {
+    if (
+      p.reloadUntil ||
+      this.now < p.switchUntil ||
+      p.ammo[p.weapon] >= WEAPONS[p.weapon].magazine
+    )
+      return;
+    p.reloadUntil = this.now + WEAPONS[p.weapon].reload;
+    this.emit("reload", p);
+  }
+  private fire(p: Player) {
+    const config = WEAPONS[p.weapon];
+    const eye = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
+    p.ammo[p.weapon]--;
+    const event = this.emit(p.power === "laser" ? "laser" : "shot", p);
+    event.shotId = event.id;
+    event.mode =
+      p.power === "laser"
+        ? "laser"
+        : p.power === "double"
+          ? "double"
+          : "normal";
+    if (p.power === "laser") {
+      this.fireLaser(p, eye, direction(p.aim, p.pitch), event.id);
+      return;
+    }
+    for (const offset of p.power === "double" ? [-8, 8] : [0]) {
+      for (let pellet = 0; pellet < config.pellets; pellet++) {
+        const center = direction(p.aim, p.pitch);
+        const spread =
+          config.pellets === 1
+            ? 0
+            : Math.tan(Math.PI / 30) * Math.sqrt(this.random());
+        const theta = this.random() * Math.PI * 2;
+        const right = { x: -Math.sin(p.aim), y: 0, z: Math.cos(p.aim) };
+        const up = {
+          x: -Math.cos(p.aim) * Math.sin(p.pitch),
+          y: Math.cos(p.pitch),
+          z: -Math.sin(p.aim) * Math.sin(p.pitch),
+        };
+        const dir = {
+          x:
+            center.x +
+            spread * (Math.cos(theta) * right.x + Math.sin(theta) * up.x),
+          y: center.y + spread * Math.sin(theta) * up.y,
+          z:
+            center.z +
+            spread * (Math.cos(theta) * right.z + Math.sin(theta) * up.z),
+        };
+        const length = Math.hypot(dir.x, dir.y, dir.z);
+        const origin = {
+          x: eye.x + right.x * offset,
+          y: eye.y,
+          z: eye.z + right.z * offset,
+        };
+        if (offset && !visible(this.arena, eye, origin)) continue;
+        this.bullets.push({
+          id: ++this.serial,
+          owner: p.id,
+          team: p.team,
+          ...origin,
+          vx: (dir.x / length) * BULLET_SPEED,
+          vy: (dir.y / length) * BULLET_SPEED,
+          vz: (dir.z / length) * BULLET_SPEED,
+          ttl: (config.range / BULLET_SPEED) * 1000,
+          damage: config.damage,
+          weapon: p.weapon,
+          shotId: event.id,
+        });
+      }
+    }
+  }
+  private fireLaser(p: Player, origin: Vec3, dir: Vec3, shotId: number) {
+    let remaining = 1600;
+    const hitIds = new Set<string>();
+    for (let bounce = 0; bounce <= 3 && remaining > 0; bounce++) {
+      const wall = rayWorld(this.arena, origin, dir, remaining),
+        range = wall?.distance ?? remaining;
+      let victim = this.nearestVictim(origin, dir, range, p.team, hitIds);
+      while (victim) {
+        hitIds.add(victim.p.id);
+        this.hit(victim.p, { owner: p.id, team: p.team }, origin);
+        victim = this.nearestVictim(origin, dir, range, p.team, hitIds);
+      }
+      const end = {
+        x: origin.x + dir.x * range,
+        y: origin.y + dir.y * range,
+        z: origin.z + dir.z * range,
+      };
+      this.beams.push({
+        id: ++this.serial,
+        team: p.team,
+        owner: p.id,
+        shotId,
+        segment: bounce,
+        start: { ...origin },
+        end,
+        until: this.now + 170,
+      });
+      remaining -= range;
+      if (!wall) break;
+      const dot =
+        dir.x * wall.normal.x + dir.y * wall.normal.y + dir.z * wall.normal.z;
+      dir = {
+        x: dir.x - 2 * dot * wall.normal.x,
+        y: dir.y - 2 * dot * wall.normal.y,
+        z: dir.z - 2 * dot * wall.normal.z,
+      };
+      origin = {
+        x: end.x + dir.x * 0.1,
+        y: end.y + dir.y * 0.1,
+        z: end.z + dir.z * 0.1,
+      };
+      remaining -= 0.1;
+    }
   }
   tick(ms: number) {
-    const dt = Math.min(Math.max(ms, 0), 100);
+    const dt = Math.min(100, Math.max(0, ms)),
+      start = this.now;
     this.now += dt;
+    this.events = this.events
+      .filter((e) => this.now - e.time < 1200)
+      .slice(-256);
     this.beams = this.beams.filter((b) => b.until > this.now);
     if (this.phase === "finished") return;
     if (this.now >= this.endsAt) {
       this.bullets = [];
+      this.beams = [];
+      this.events = [];
       if (this.phase === "intermission") {
         this.round++;
         this.phase = "playing";
@@ -506,18 +816,32 @@ export class Game {
       } else {
         this.phase = this.round === 3 ? "finished" : "intermission";
         this.endsAt = this.now + (this.phase === "finished" ? 0 : BREAK_MS);
+        for (const p of this.players) {
+          p.dashUntil = 0;
+          p.power = null;
+          p.storedPower = null;
+        }
       }
       this.inputs.clear();
       this.shotPresses.clear();
+      this.emit("round", this.players[0]);
       return;
     }
+    for (const p of this.players) {
+      const stored = this.inputs.get(p.id);
+      if (stored) {
+        p.ack = stored.input.seq;
+        if (p.hp <= 0 || this.phase !== "playing")
+          for (const key of ["jump", "dash", "use", "swap", "reload"] as const)
+            p.actions[key] = Math.max(p.actions[key], stored.input[key]);
+      }
+    }
     if (this.phase !== "playing") return;
-    for (const pickup of this.pickups) {
+    for (const pickup of this.pickups)
       if (pickup.readyAt > 0 && pickup.readyAt <= this.now) {
         pickup.kind = this.randomPower();
         this.placePickup(pickup);
       }
-    }
     for (const p of this.players) {
       if (p.hp <= 0) {
         this.shotPresses.delete(p.id);
@@ -527,120 +851,144 @@ export class Game {
       const stored = this.inputs.get(p.id);
       const i = p.bot
         ? this.botInput(p)
-        : stored && this.now - stored.at < 300
+        : stored && this.now - stored.at <= 300
           ? stored.input
-          : { x: 0, y: 0, aim: p.aim, fire: false };
-      const length = Math.max(1, Math.hypot(i.x, i.y));
-      const speed = movementSpeed(p, this.now);
-      const nx = p.x + ((i.x / length) * speed * dt) / 1000,
-        ny = p.y + ((i.y / length) * speed * dt) / 1000;
-      if (!blocked(nx, p.y, RADIUS, this.walls)) p.x = nx;
-      if (!blocked(p.x, ny, RADIUS, this.walls)) p.y = ny;
-      if (this.now >= p.powerUntil) p.power = null;
-      for (const pickup of this.pickups) {
-        if (
-          pickup.readyAt === 0 &&
-          Math.hypot(p.x - pickup.x, p.y - pickup.y) < 36
-        ) {
-          p.power = pickup.kind;
-          p.powerUntil = this.now + POWER_MS;
-          pickup.readyAt = this.now + 10_000;
-        }
+          : { ...idleInput(), aim: p.aim, pitch: p.pitch, weapon: p.weapon };
+      const actions = {
+        jump: false,
+        dash: false,
+        use: false,
+        swap: false,
+        reload: false,
+      };
+      for (const key of ["jump", "dash", "use", "swap", "reload"] as const) {
+        actions[key] = i[key] > p.actions[key];
+        p.actions[key] = Math.max(p.actions[key], i[key]);
       }
+      p.ack = Math.max(p.ack, i.seq);
       p.aim = i.aim;
-      const pressed = this.shotPresses.delete(p.id);
-      if ((i.fire || pressed) && this.now >= p.nextShot) {
-        p.nextShot =
-          this.now + (p.bot ? 520 : FIRE_MS) * (p.power === "rapid" ? 0.5 : 1);
-        if (p.power === "laser") {
-          this.fireLaser(p);
-          continue;
-        }
-        for (const offset of p.power === "double" ? [-8, 8] : [0])
-          this.bullets.push({
-            id: ++this.serial,
-            owner: p.id,
-            team: p.team,
-            bot: p.bot,
-            x: p.x - Math.sin(i.aim) * offset,
-            y: p.y + Math.cos(i.aim) * offset,
-            vx: Math.cos(i.aim) * BULLET_SPEED,
-            vy: Math.sin(i.aim) * BULLET_SPEED,
-            ttl: 850,
-          });
+      p.pitch = i.pitch;
+      if (p.powerUntil <= this.now) p.power = null;
+      if (actions.use && p.storedPower && !p.power) {
+        p.power = p.storedPower;
+        p.storedPower = null;
+        p.powerUntil = this.now + POWER_INFO[p.power].duration;
+        this.emit("use", p, undefined, p.power);
       }
-    }
-    this.bullets = this.bullets.filter((b) => {
-      b.ttl -= dt;
-      if (b.ttl <= 0) return false;
-      const steps = Math.ceil((BULLET_SPEED * dt) / 1000 / 7);
-      for (let j = 0; j < steps; j++) {
-        b.x += (b.vx * dt) / 1000 / steps;
-        b.y += (b.vy * dt) / 1000 / steps;
-        if (blocked(b.x, b.y, 2, this.walls)) return false;
-        const victim = this.players.find(
-          (p) =>
-            p.hp > 0 &&
-            p.team !== b.team &&
-            Math.hypot(p.x - b.x, p.y - b.y) < RADIUS + 3,
-        );
-        if (victim) {
-          this.hit(victim, b);
-          return false;
-        }
+      if (p.reloadUntil && this.now >= p.reloadUntil) {
+        p.ammo[p.weapon] = WEAPONS[p.weapon].magazine;
+        p.reloadUntil = 0;
       }
-      return true;
-    });
-  }
-  private fireLaser(p: Player) {
-    let x = p.x,
-      y = p.y;
-    let vx = Math.cos(p.aim),
-      vy = Math.sin(p.aim),
-      bounces = 0;
-    let startX = x,
-      startY = y;
-    const segment = () =>
-      this.beams.push({
-        id: ++this.serial,
-        team: p.team,
-        x: startX,
-        y: startY,
-        endX: x,
-        endY: y,
-        until: this.now + 170,
-      });
-    const hit = new Set<string>();
-    for (let distance = 0; distance < 1600; distance += 5) {
-      let nx = x + vx * 5,
-        ny = y + vy * 5;
-      if (blocked(nx, ny, 2, this.walls)) {
-        segment();
-        if (bounces++ >= 3) return;
-        const blockedX = blocked(nx, y, 2, this.walls);
-        const blockedY = blocked(x, ny, 2, this.walls);
-        if (blockedX || !blockedY) vx = -vx;
-        if (blockedY || !blockedX) vy = -vy;
-        startX = x;
-        startY = y;
-        nx = x + vx * 5;
-        ny = y + vy * 5;
-        if (blocked(nx, ny, 2, this.walls)) return;
+      if (i.weapon !== p.weapon) {
+        p.reloadUntil = 0;
+        p.weapon = i.weapon;
+        p.switchUntil = this.now + 250;
+        this.emit("switch", p);
       }
-      x = nx;
-      y = ny;
-      for (const target of this.players) {
+      if (actions.reload) this.reload(p);
+      const previous = { x: p.x, y: p.y, z: p.z };
+      const motion = moveBody(
+        p,
+        { ...i, jump: actions.jump, dash: actions.dash },
+        this.arena,
+        dt,
+        start,
+        movementSpeed(p, this.now),
+      );
+      for (const kind of ["jump", "dash", "land"] as const)
+        if (motion[kind]) this.emit(kind, p);
+      if (
+        p.grounded &&
+        distance(previous, p) > 2 &&
+        this.now - (this.steps.get(p.id) ?? 0) > 350
+      ) {
+        this.emit("step", p);
+        this.steps.set(p.id, this.now);
+      }
+      for (const pickup of this.pickups)
         if (
-          target.team !== p.team &&
-          target.hp > 0 &&
-          !hit.has(target.id) &&
-          Math.hypot(target.x - x, target.y - y) < RADIUS + 3
+          !pickup.readyAt &&
+          distance(p, pickup) < 40 &&
+          (!p.storedPower || actions.swap)
         ) {
-          hit.add(target.id);
-          this.hit(target, { owner: p.id, team: p.team, bot: p.bot });
+          p.storedPower = pickup.kind;
+          pickup.readyAt = this.now + 10000;
+          this.emit("pickup", p, undefined, pickup.kind);
+          break;
+        }
+      const pressed = this.shotPresses.delete(p.id);
+      if (
+        (i.fire || pressed) &&
+        this.now >= p.nextShot &&
+        this.now >= p.switchUntil &&
+        !p.reloadUntil
+      ) {
+        if (p.ammo[p.weapon] <= 0) {
+          this.emit("empty", p);
+          this.reload(p);
+        } else {
+          const interval =
+            WEAPONS[p.weapon].interval * (p.power === "rapid" ? 0.5 : 1);
+          p.nextShot = (p.nextShot < start ? this.now : p.nextShot) + interval;
+          this.fire(p);
+          if (p.ammo[p.weapon] === 0) this.reload(p);
         }
       }
     }
-    segment();
+    for (let a = 0; a < this.players.length; a++)
+      for (let b = a + 1; b < this.players.length; b++) {
+        const p = this.players[a],
+          q = this.players[b];
+        if (
+          p.hp <= 0 ||
+          q.hp <= 0 ||
+          p.y + BODY_HEIGHT <= q.y ||
+          q.y + BODY_HEIGHT <= p.y
+        )
+          continue;
+        const dx = q.x - p.x,
+          dz = q.z - p.z,
+          len = Math.hypot(dx, dz);
+        if (len >= RADIUS * 2) continue;
+        const nx = len ? dx / len : 1,
+          nz = len ? dz / len : 0,
+          push = (RADIUS * 2 - len) / 2;
+        for (const [body, sign] of [
+          [p, -1],
+          [q, 1],
+        ] as const) {
+          const x = body.x + nx * push * sign,
+            z = body.z + nz * push * sign;
+          if (!bodyBlocked(this.arena, x, body.y, z)) {
+            body.x = x;
+            body.z = z;
+          }
+        }
+      }
+    this.bullets = this.bullets.filter((b) => {
+      const travel = (BULLET_SPEED * Math.min(dt, b.ttl)) / 1000,
+        dir = {
+          x: b.vx / BULLET_SPEED,
+          y: b.vy / BULLET_SPEED,
+          z: b.vz / BULLET_SPEED,
+        };
+      const wall = rayWorld(this.arena, b, dir, travel);
+      const victim = this.nearestVictim(
+        b,
+        dir,
+        wall ? Math.max(0, wall.distance - 0.01) : travel,
+        b.team,
+      );
+      if (victim) {
+        this.hit(victim.p, b, { x: b.x, y: b.y, z: b.z });
+        return false;
+      }
+      if (wall) return false;
+      b.x += dir.x * travel;
+      b.y += dir.y * travel;
+      b.z += dir.z * travel;
+      b.ttl -= dt;
+      return b.ttl > 0;
+    });
   }
 }

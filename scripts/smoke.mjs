@@ -21,6 +21,7 @@ try {
         ws.send(
           JSON.stringify({
             type: "join",
+            protocol: 3,
             name: `Smoke${i}`,
             team: Math.floor(i / 2),
           }),

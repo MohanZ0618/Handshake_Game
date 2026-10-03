@@ -9,5 +9,12 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": ["src", "shared", "server", "tests", "vite.config.ts"]
+  "include": [
+    "src",
+    "shared",
+    "server",
+    "tests",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
 }

@@ -1,5 +1,6 @@
 import {
   Game,
+  PROTOCOL,
   validInput,
   type ClientMessage,
   type ServerMessage,
@@ -30,12 +31,22 @@ export class RoomSession {
       const m = JSON.parse(raw) as ClientMessage;
       if (!m || typeof m !== "object") throw new Error("Invalid message.");
       if (m.type === "join") {
+        if (m.protocol !== PROTOCOL)
+          throw new Error(
+            "Game updated. Refresh this page to join (protocol 3 required).",
+          );
         if (this.peers.has(peer)) throw new Error("Already joined.");
         const id = crypto.randomUUID();
         this.game.addHuman(id, m.name, m.team);
         this.peers.set(peer, id);
         this.lastSeen.set(peer, Date.now());
-        this.send(peer, { type: "welcome", id, code: this.code });
+        this.send(peer, {
+          type: "welcome",
+          id,
+          code: this.code,
+          protocol: PROTOCOL,
+          arena: this.game.arena,
+        });
         this.broadcast();
         this.changed();
         return;

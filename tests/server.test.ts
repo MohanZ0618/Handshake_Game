@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect } from "vitest";
 import { WebSocket } from "ws";
 import { startLocalServer } from "../server/local";
-import type { ServerMessage, Snapshot } from "../shared/game";
+import { idleInput, type ServerMessage, type Snapshot } from "../shared/game";
 let server: ReturnType<typeof startLocalServer> | undefined;
 afterEach(async () => {
   await server?.close();
@@ -19,14 +19,69 @@ function join(base: string, code: string, team: number, name: string) {
     const ws = new WebSocket(
       `${base.replace("http", "ws")}/api/rooms/${code}/socket`,
     );
-    ws.on("open", () => ws.send(JSON.stringify({ type: "join", name, team })));
+    ws.on("open", () =>
+      ws.send(JSON.stringify({ type: "join", protocol: 3, name, team })),
+    );
     ws.once("message", (d) =>
       resolve({ ws, message: JSON.parse(d.toString()) }),
     );
   });
 }
 describe("HTTP and real WebSocket integration", () => {
-  it("broadcasts the same random map and supplies to different players", async () => {
+  it("broadcasts acknowledged 3D jump and dash state to both clients without repeating actions", async () => {
+    const base = await setup();
+    const { code } = (await fetch(`${base}/api/rooms`, { method: "POST" }).then(
+      (r) => r.json(),
+    )) as { code: string };
+    const a = await join(base, code, 0, "Alpha"),
+      b = await join(base, code, 1, "Bravo");
+    if (a.message.type !== "welcome") throw new Error("Join failed");
+    const id = a.message.id;
+    const stateAfter = (ws: WebSocket, seq: number) =>
+      new Promise<Snapshot>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          ws.off("message", listener);
+          reject(new Error("Action state timeout"));
+        }, 2000);
+        const listener = (raw: Buffer) => {
+          const m = JSON.parse(raw.toString()) as ServerMessage;
+          if (
+            m.type === "state" &&
+            m.state.players.some((p) => p.id === id && p.ack >= seq)
+          ) {
+            clearTimeout(timer);
+            ws.off("message", listener);
+            resolve(m.state);
+          }
+        };
+        ws.on("message", listener);
+      });
+    const first = Promise.all([stateAfter(a.ws, 1), stateAfter(b.ws, 1)]);
+    a.ws.send(
+      JSON.stringify({
+        type: "input",
+        input: { ...idleInput(), seq: 1, x: 1, jump: 1, dash: 1 },
+      }),
+    );
+    const [sa, sb] = await first;
+    const pa = sa.players.find((p) => p.id === id)!,
+      pb = sb.players.find((p) => p.id === id)!;
+    expect(pa.y).toBeGreaterThan(0);
+    expect(pa.x).toBeGreaterThan(120);
+    expect(pa).toEqual(pb);
+    expect(pa.dashReadyAt).toBeGreaterThan(sa.now);
+    const second = stateAfter(a.ws, 2);
+    a.ws.send(
+      JSON.stringify({
+        type: "input",
+        input: { ...idleInput(), seq: 2, jump: 1, dash: 1 },
+      }),
+    );
+    expect((await second).players.find((p) => p.id === id)!.dashReadyAt).toBe(
+      pa.dashReadyAt,
+    );
+  });
+  it("broadcasts the same 3D map and supplies to different players", async () => {
     const base = await setup();
     const { code } = (await fetch(`${base}/api/rooms`, { method: "POST" }).then(
       (r) => r.json(),
@@ -50,7 +105,10 @@ describe("HTTP and real WebSocket integration", () => {
         ws.on("message", listener);
       });
     const [sa, sb] = await Promise.all([nextState(a.ws), nextState(b.ws)]);
-    expect(sa.walls).toEqual(sb.walls);
+    expect(a.message.type === "welcome" && a.message.arena).toEqual(
+      b.message.type === "welcome" && b.message.arena,
+    );
+    expect(sa).not.toHaveProperty("arena");
     expect(sa.pickups).toEqual(sb.pickups);
     expect(sa.pickups).toHaveLength(7);
   });
