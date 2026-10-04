@@ -1,10 +1,24 @@
 import { describe, it, expect } from "vitest";
 import { WEAPONS, WEAPON_IDS, fullAmmo } from "../shared/weapons";
-import { validInput, idleInput } from "../shared/game";
+import { BULLET_SPEED, validInput, idleInput } from "../shared/game";
 import { ready, input, run } from "./helpers";
+const STANDARD_WEAPON_IDS = WEAPON_IDS.filter((id) => id !== "sniper");
 describe("authoritative weapons and magazines", () => {
+  it("doubles projectile speed while preserving configured range", () => {
+    expect(BULLET_SPEED).toBe(1640);
+    for (const weapon of STANDARD_WEAPON_IDS) {
+      const { g, p } = ready();
+      p.weapon = weapon;
+      input(g, p, { weapon, fire: true });
+      g.tick(50);
+      for (const bullet of g.bullets) {
+        expect(Math.hypot(bullet.vx, bullet.vy, bullet.vz)).toBeCloseTo(BULLET_SPEED);
+        expect((bullet.ttl * BULLET_SPEED) / 1000).toBeCloseTo(WEAPONS[weapon].range - BULLET_SPEED * 0.05);
+      }
+    }
+  });
   it("enforces cadence under repeated inputs and preserves rapid fire's average interval", () => {
-    for (const weapon of WEAPON_IDS) {
+    for (const weapon of STANDARD_WEAPON_IDS) {
       const { g, p } = ready();
       p.weapon = weapon;
       p.shieldUntil = 1e9;
@@ -37,7 +51,7 @@ describe("authoritative weapons and magazines", () => {
       2950,
     ]);
   });
-  for (const weapon of WEAPON_IDS) {
+  for (const weapon of STANDARD_WEAPON_IDS) {
     it(`${weapon} applies actual projectile damage to an enemy`, () => {
       const { g, p, q } = ready();
       p.weapon = weapon;
@@ -66,7 +80,7 @@ describe("authoritative weapons and magazines", () => {
         expect(
           Math.acos(b.vx / Math.hypot(b.vx, b.vy, b.vz)),
         ).toBeLessThanOrEqual(Math.PI / 30 + 1e-6);
-        expect((b.ttl * 820) / 1000).toBeCloseTo(WEAPONS[weapon].range - 41);
+        expect((b.ttl * BULLET_SPEED) / 1000).toBeCloseTo(WEAPONS[weapon].range - BULLET_SPEED * 0.05);
       }
     });
   }
@@ -145,7 +159,7 @@ describe("authoritative weapons and magazines", () => {
   });
   it("death and the next round restore all magazines and rifle", () => {
     const { g, p, q } = ready();
-    p.ammo = { rifle: 0, smg: 2, shotgun: 1 };
+    p.ammo = { rifle: 0, smg: 2, shotgun: 1, sniper: 0 };
     p.weapon = "smg";
     p.hp = 25;
     p.reloadUntil = g.now + 1000;

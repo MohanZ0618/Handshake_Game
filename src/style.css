@@ -439,6 +439,87 @@ dialog h2 {
   line-height: 1;
   text-shadow: 0 1px 3px #000;
 }
+#scope-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+}
+#scope-overlay .scope-lens {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 0;
+  box-shadow: none;
+  position: relative;
+}
+#scope-overlay .scope-lens::before,
+#scope-overlay .scope-lens::after {
+  content: "";
+  position: absolute;
+  background: #191c1ddd;
+}
+#scope-overlay .scope-lens::before { width: 1px; height: 100%; left: 50%; display: none; }
+#scope-overlay .scope-lens::after { height: 1px; width: 100%; top: 50%; display: none; }
+#scope-overlay .scope-lens i {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #ff2525;
+  box-shadow: 0 0 3px #ff3f3f;
+}
+#scope-overlay[data-weapon="rifle"] .scope-lens {
+  width: 6px;
+  height: 6px;
+}
+#scope-overlay[data-weapon="sniper"] .scope-lens {
+  width: auto;
+  height: 64%;
+  aspect-ratio: 1;
+  border: 7px solid #202324;
+  box-shadow: 0 0 0 100vmax #0a0b0cd4, inset 0 0 20px #0007;
+}
+#scope-overlay[data-weapon="sniper"] .scope-lens::before,
+#scope-overlay[data-weapon="sniper"] .scope-lens::after { display: block; }
+#scope-overlay[data-weapon="smg"] .scope-lens {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  box-shadow: none;
+}
+#scope-overlay[data-weapon="smg"] .scope-lens::before,
+#scope-overlay[data-weapon="smg"] .scope-lens::after { display: none; }
+#scope-overlay[data-weapon="smg"] .scope-lens i { background: #ff2525; box-shadow: 0 0 3px #ff3838; }
+#scope-overlay[data-weapon="shotgun"] .scope-lens {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  box-shadow: none;
+}
+#scope-overlay[data-weapon="shotgun"] .scope-lens::before,
+#scope-overlay[data-weapon="shotgun"] .scope-lens::after { background: #191c1ddd; }
+#power-announcement {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 13px 24px;
+  color: #ffe7a0;
+  border: 1px solid #ffd05e;
+  background: #211707e8;
+  box-shadow: 0 0 28px #ffbd40aa;
+  font-weight: 900;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  pointer-events: none;
+}
 .fps-field #hit-marker {
   color: #ffdd98;
   font-size: 42px;
@@ -462,13 +543,52 @@ dialog h2 {
 #kill-message {
   position: absolute;
   left: 50%;
-  top: 60%;
+  top: 59%;
   transform: translateX(-50%);
-  color: #ffe0a5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 15px 5px 5px;
+  background: #081421dd;
+  border: 1px solid var(--kill-color, #ff765e);
+  border-radius: 36px;
+  box-shadow: 0 0 22px color-mix(in srgb, var(--kill-color, #ff765e) 45%, transparent);
+  color: #f5f8fb;
   font-weight: 700;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
   opacity: 0;
   pointer-events: none;
+  z-index: 5;
+  white-space: nowrap;
+  transition: opacity .12s ease;
+}
+.kill-emblem {
+  display: block;
+  width: 54px;
+  height: 54px;
+  color: var(--kill-color, #ff765e);
+  filter: drop-shadow(0 0 8px var(--kill-color, #ff765e));
+}
+.kill-emblem svg { width: 100%; height: 100%; }
+.kill-caption { display: flex; flex-direction: column; gap: 3px; font-size: 14px; }
+.kill-caption small { color: var(--kill-color, #ff765e); font-size: 10px; letter-spacing: 1.5px; }
+#sync-announcement {
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #b5f3ff;
+  background: #0b2235d9;
+  border: 1px solid #75d9f1;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s ease;
+  z-index: 4;
 }
 .ability-panel {
   position: absolute;
@@ -931,11 +1051,13 @@ footer {
 #weapon-slots .selected {
   color: #b4f1ff;
 }
+#weapon-slots .unavailable { color: #64707a; }
 #reload-bar {
   background: #a3edff;
 }
 #shield-edge,
-#speed-edge {
+#speed-edge,
+#sync-edge {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -951,6 +1073,20 @@ footer {
   opacity: 1;
   box-shadow: inset 0 0 40px #70e1b066;
 }
+#sync-edge.active {
+  opacity: .65;
+  background: linear-gradient(100deg, #79deff55, transparent 12% 88%, #79deff55);
+  animation: sync-wind .55s linear infinite;
+}
+@keyframes sync-wind {
+  from { background-position: -40px 0; }
+  to { background-position: 40px 0; }
+}
+#sync-status {
+  color: #9cdbeb;
+  font-size: 11px;
+  letter-spacing: .5px;
+}
 select {
   background: #142a3c;
   color: #dfedf7;
@@ -962,4 +1098,265 @@ select {
 #shield-edge.blocked {
   opacity: 1;
   box-shadow: inset 0 0 85px 25px #79deffbb;
+}
+.career-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.career-nav button {
+  padding: 9px 11px;
+  font-size: 12px;
+}
+#career-balance {
+  color: #e7ba73;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  margin-right: 5px;
+  white-space: nowrap;
+}
+.career-dialog {
+  width: min(850px, calc(100vw - 24px));
+  max-height: min(82vh, 850px);
+  padding: 0;
+  border: 1px solid #796451;
+  border-radius: 8px;
+  background: #171b1e;
+  color: #ecebe5;
+  overflow: auto;
+}
+.career-dialog::backdrop {
+  background: #07090bd9;
+  backdrop-filter: blur(5px);
+}
+.career-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 26px;
+  background: #22282b;
+  border-bottom: 2px solid #be7847;
+}
+.career-head h2 {
+  margin: 5px 0 0;
+  font-size: 26px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+#career-content {
+  padding: 24px 26px 30px;
+}
+.career-feature {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.career-feature > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  border: 1px solid #65513e;
+  background: linear-gradient(120deg, #3a3028, #1c2022);
+}
+.career-feature strong {
+  font-size: 35px;
+  color: #f0bd75;
+}
+.career-feature span:last-child {
+  font-size: 13px;
+  color: #c9c7be;
+}
+.career-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 16px;
+  flex-wrap: wrap;
+}
+.career-tabs button {
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.career-tabs button.active {
+  background: #bd7548;
+  border-color: #bd7548;
+  color: #161a1b;
+}
+.career-list {
+  display: grid;
+  gap: 8px;
+}
+.career-row {
+  display: grid;
+  grid-template-columns: 60px 1fr 90px;
+  gap: 15px;
+  align-items: center;
+  padding: 14px 16px;
+  background: #242a2b;
+  border-left: 3px solid #6d7779;
+}
+.career-row:nth-child(1) {
+  border-color: #f3c072;
+}
+.career-row:nth-child(2) {
+  border-color: #bfc5c6;
+}
+.career-row:nth-child(3) {
+  border-color: #b57854;
+}
+.career-row.mine {
+  background: #3a3329;
+}
+.career-row > b {
+  color: #eabf7f;
+}
+.career-row > strong {
+  font-size: 22px;
+  text-align: right;
+  color: #f1eadc;
+}
+.career-row small {
+  display: block;
+  color: #aeb7b5;
+  margin-top: 4px;
+}
+.objective-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  align-items: center;
+  padding: 20px;
+  background: #242a2b;
+  border-left: 3px solid #b98150;
+}
+.objective-row h3,
+.shop-card h3 {
+  margin: 5px 0;
+  font-size: 19px;
+}
+.objective-row p,
+.shop-card p {
+  margin: 5px 0 10px;
+  font-size: 13px;
+  color: #b9c0bd;
+}
+.objective-track {
+  height: 7px;
+  background: #3b4240;
+}
+.objective-track i {
+  display: block;
+  height: 100%;
+  background: #d69053;
+}
+.objective-row button {
+  min-width: 118px;
+}
+.career-note {
+  color: #e3b978;
+  font-size: 12px;
+  margin: 20px 0 0;
+}
+.career-wallet {
+  padding: 12px 16px;
+  margin: 16px 0;
+  background: #3a3023;
+  color: #ffd08a;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.shop-card {
+  padding: 16px;
+  border: 1px solid #444c4a;
+  background: #262c2c;
+}
+.shop-swatch {
+  height: 55px;
+  margin-bottom: 14px;
+  background: linear-gradient(115deg, #121a28, var(--item), #5bc9ff, #da72ff, #ffe08a, var(--item), #121a28);
+  background-size: 250% 100%;
+  animation: skin-flow 4s linear infinite;
+  border-bottom: 3px solid var(--item);
+}
+@keyframes skin-flow { to { background-position: 250% 0; } }
+.shop-card button {
+  width: 100%;
+  font-size: 12px;
+}
+.starter-colors {
+  display: flex;
+  gap: 6px;
+}
+.shop-card .starter-color {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 4px;
+  border: 1px solid #59615d;
+  background: #343c3b;
+  font-size: 10px;
+}
+.starter-color i {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--item);
+}
+.shop-card .starter-color.selected {
+  border-color: #dfb676;
+  color: #dfb676;
+}
+.career-defaults {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.armorbar i {
+  background: #69bdf1;
+}
+#armor {
+  color: #9ad8ff;
+  font-size: 11px;
+}
+#battery-hint {
+  color: #9ad8ff;
+  font-size: 11px;
+}
+.battery-track i {
+  background: #75cfff;
+}
+@media (max-width: 750px) {
+  header {
+    height: auto;
+    min-height: 90px;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 0;
+  }
+  .career-nav {
+    order: 3;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .career-feature,
+  .shop-grid {
+    grid-template-columns: 1fr;
+  }
+  .objective-row {
+    grid-template-columns: 1fr;
+  }
 }

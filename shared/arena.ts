@@ -27,6 +27,7 @@ export interface Arena {
   ramps: Ramp[];
   spawns: Vec3[];
   supplies: Vec3[];
+  batteries: Vec3[];
 }
 export function rampHeight(r: Ramp, x: number, z: number): number | undefined {
   if (x < r.x || x > r.x + r.w || z < r.z || z > r.z + r.d) return;
@@ -104,6 +105,12 @@ export function createArena(): Arena {
     boxes,
     ramps,
     supplies,
+    batteries: [
+      { x: 1200, y: 0, z: 670 },
+      { x: 1500, y: 0, z: 800 },
+      { x: 1200, y: 0, z: 930 },
+      { x: 900, y: 0, z: 800 },
+    ],
     spawns: [
       { x: 120, y: 0, z: 120 },
       { x: 2280, y: 0, z: 120 },

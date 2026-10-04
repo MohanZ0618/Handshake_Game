@@ -1,7 +1,10 @@
 import { afterEach, describe, it, expect } from "vitest";
 import { WebSocket } from "ws";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as pathJoin } from "node:path";
 import { startLocalServer } from "../server/local";
-import { idleInput, type ServerMessage, type Snapshot } from "../shared/game";
+import { idleInput, PROTOCOL, type ServerMessage, type Snapshot } from "../shared/game";
 let server: ReturnType<typeof startLocalServer> | undefined;
 afterEach(async () => {
   await server?.close();
@@ -14,13 +17,13 @@ async function setup() {
   if (!a || typeof a === "string") throw new Error("No port");
   return `http://127.0.0.1:${a.port}`;
 }
-function join(base: string, code: string, team: number, name: string) {
+function join(base: string, code: string, team: number, name: string, token?: string) {
   return new Promise<{ ws: WebSocket; message: ServerMessage }>((resolve) => {
     const ws = new WebSocket(
       `${base.replace("http", "ws")}/api/rooms/${code}/socket`,
     );
     ws.on("open", () =>
-      ws.send(JSON.stringify({ type: "join", protocol: 3, name, team })),
+      ws.send(JSON.stringify({ type: "join", protocol: PROTOCOL, name, team, token })),
     );
     ws.once("message", (d) =>
       resolve({ ws, message: JSON.parse(d.toString()) }),
@@ -28,6 +31,60 @@ function join(base: string, code: string, team: number, name: string) {
   });
 }
 describe("HTTP and real WebSocket integration", () => {
+  it("keeps unfinished points after leaving and restarting the local server", async () => {
+    const dir = await mkdtemp(pathJoin(tmpdir(), "blockfire-career-"));
+    const careerPath = pathJoin(dir, "career.json");
+    try {
+      server = startLocalServer(0, careerPath);
+      await new Promise<void>((resolve) => server!.server.on("listening", resolve));
+      const address = server.server.address();
+      if (!address || typeof address === "string") throw new Error("No port");
+      const base = `http://127.0.0.1:${address.port}`;
+      const created = await fetch(`${base}/api/career/new`, {
+        method: "POST", body: JSON.stringify({ name: "Persisted" }),
+      }).then((response) => response.json()) as { token: string; profile: { id: string } };
+      const { code } = await fetch(`${base}/api/rooms`, { method: "POST" })
+        .then((response) => response.json()) as { code: string };
+      const player = await join(base, code, 0, "Persisted", created.token);
+      expect(player.message.type).toBe("welcome");
+      const game = server.rooms.get(code)!.session.game;
+      const human = game.players.find((p) => p.careerId === created.profile.id)!;
+      const bot = game.players.find((p) => p.bot && p.team !== human.team)!;
+      Object.assign(bot, { hp: 10, armor: 0, shieldUntil: 0 });
+      game.hit(bot, { owner: human.id, team: human.team });
+      const left = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Leave acknowledgement timeout")), 2000);
+        player.ws.on("message", (raw) => {
+          if ((JSON.parse(raw.toString()) as ServerMessage).type === "left") {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+      });
+      player.ws.send(JSON.stringify({ type: "leave" }));
+      await left;
+      player.ws.close();
+      await new Promise<void>((resolve) => player.ws.once("close", resolve));
+      const current = await fetch(`${base}/api/career/rankings`)
+        .then((response) => response.json()) as { totalPoints: { totalPoints: number }[] };
+      expect(current.totalPoints[0]?.totalPoints).toBe(1);
+      await server.close();
+      server = undefined;
+      server = startLocalServer(0, careerPath);
+      await new Promise<void>((resolve) => server!.server.on("listening", resolve));
+      const nextAddress = server.server.address();
+      if (!nextAddress || typeof nextAddress === "string") throw new Error("No port");
+      const reopened = `http://127.0.0.1:${nextAddress.port}`;
+      const profile = await fetch(`${reopened}/api/career/profile`, {
+        headers: { Authorization: `Bearer ${created.token}` },
+      }).then((response) => response.json()) as { profile: { totalPoints: number; botKills: number; matches: number } };
+      expect(profile.profile).toMatchObject({ totalPoints: 1, botKills: 1, matches: 0 });
+    } finally {
+      await server?.close();
+      server = undefined;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it("broadcasts acknowledged 3D jump and dash state to both clients without repeating actions", async () => {
     const base = await setup();
     const { code } = (await fetch(`${base}/api/rooms`, { method: "POST" }).then(

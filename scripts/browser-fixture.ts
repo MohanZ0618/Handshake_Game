@@ -47,6 +47,7 @@ const server = createServer(async (req, res) => {
       ".css": "text/css",
       ".json": "application/json",
       ".glb": "model/gltf-binary",
+      ".gltf": "model/gltf+json",
     };
     res.setHeader(
       "Content-Type",

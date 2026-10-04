@@ -2,15 +2,57 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { WebSocketServer } from "ws";
 import { RoomSession } from "./session";
-export function startLocalServer(port = 8787) {
+import { CareerStore } from "./career";
+import type { CareerData } from "../shared/career";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+export function startLocalServer(
+  port = 8787,
+  careerPath = "artifacts/local-career.json",
+) {
   const rooms = new Map<string, { session: RoomSession; touched: number }>();
+  const career = new CareerStore(
+    async () => {
+      try {
+        return JSON.parse(await readFile(careerPath, "utf8")) as CareerData;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw e;
+      }
+    },
+    async (data) => {
+      await mkdir(dirname(careerPath), { recursive: true });
+      const tmp = careerPath + ".tmp";
+      await writeFile(tmp, JSON.stringify(data));
+      await rename(tmp, careerPath);
+    },
+  );
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
   function createRoom() {
     let code: string;
     do {
       code = Math.random().toString(36).slice(2, 8).toUpperCase();
     } while (rooms.has(code));
-    const room = { session: new RoomSession(code), touched: Date.now() };
+    const room = {
+      session: new RoomSession(
+        code,
+        () => {},
+        (token) => career.resolve(token),
+        (result) => {
+          void career
+            .settle(result)
+            .catch((e) => console.error("Career settlement failed:", e));
+        },
+        (update) => {
+          return career.progress(update)
+            .catch((e) => {
+              console.error("Career progress failed:", e);
+              throw e;
+            });
+        },
+      ),
+      touched: Date.now(),
+    };
     rooms.set(code, room);
     return code;
   }
@@ -18,6 +60,27 @@ export function startLocalServer(port = 8787) {
     res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-store");
     const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.pathname.startsWith("/api/career/")) {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const request = new Request(url, {
+          method: req.method,
+          headers: {
+            Authorization: req.headers.authorization ?? "",
+            "Content-Type": "application/json",
+          },
+          body: req.method === "POST" ? Buffer.concat(chunks) : undefined,
+        });
+        const response = await career.handle(request);
+        res.statusCode = response.status;
+        res.end(await response.text());
+      })().catch(() => {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: "Career server unavailable." }));
+      });
+      return;
+    }
     if (url.pathname === "/api/health") {
       res.end(JSON.stringify({ ok: true }));
       return;
@@ -96,10 +159,15 @@ export function startLocalServer(port = 8787) {
   return {
     server,
     rooms,
-    close: () => {
+    close: async () => {
       clearInterval(timer);
+      const leaves = [...rooms.values()].flatMap((room) =>
+        [...room.session.peers.keys()].map((peer) => room.session.leave(peer)),
+      );
+      await Promise.all(leaves);
       for (const c of wss.clients) c.terminate();
       wss.close();
+      await career.flush();
       return new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

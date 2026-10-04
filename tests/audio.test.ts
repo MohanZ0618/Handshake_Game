@@ -168,7 +168,7 @@ it("tolerates unavailable audio and disabled or malformed settings storage", asy
     muted: false,
     sensitivity: 1,
     shake: true,
-    quality: "low",
+    quality: "high",
   });
   expect(() => saveSettings(loadSettings())).not.toThrow();
   vi.stubGlobal("localStorage", {
@@ -179,7 +179,7 @@ it("tolerates unavailable audio and disabled or malformed settings storage", asy
     volume: 1,
     sensitivity: 0.2,
     shake: false,
-    quality: "low",
+    quality: "high",
     muted: true,
   });
 });

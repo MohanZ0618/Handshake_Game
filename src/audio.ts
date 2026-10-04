@@ -12,7 +12,7 @@ export function loadSettings(): Settings {
     muted: false,
     sensitivity: 1,
     shake: true,
-    quality: "low",
+    quality: "high",
   };
   try {
     const s = JSON.parse(localStorage.getItem("blockfire-settings-v2") ?? "{}");
@@ -26,7 +26,7 @@ export function loadSettings(): Settings {
         typeof s.sensitivity === "number" && Number.isFinite(s.sensitivity)
           ? Math.max(0.2, Math.min(3, s.sensitivity))
           : 1,
-      quality: s.quality === "high" ? "high" : "low",
+      quality: s.quality === "low" ? "low" : "high",
       shake: typeof s.shake === "boolean" ? s.shake : true,
     };
   } catch {
@@ -99,12 +99,17 @@ export class Sound {
     const personal =
       (e.kind === "hit" || e.kind === "kill") && e.target === me.id;
     const own = e.actor === me.id;
-    if ((e.kind === "pickup" || e.kind === "use") && !own) return;
+    if (
+      (e.kind === "pickup" || e.kind === "use" || e.kind === "charge") &&
+      !own
+    )
+      return;
+    if (e.kind === "sync" && e.team !== me.team) return;
     const dx = e.x - me.x,
       dz = e.z - me.z,
       dist = Math.hypot(dx, e.y - me.y - 52, dz);
     const volume =
-      personal || own || e.kind === "round"
+      personal || own || e.kind === "round" || e.kind === "sniper-spawn" || e.kind === "sync"
         ? 1
         : Math.max(0, 1 - dist / 1050) * 0.6;
     if (volume <= 0) return;
@@ -122,6 +127,34 @@ export class Sound {
           e.weapon === "shotgun" ? 0.23 : e.weapon === "smg" ? 0.07 : 0.11;
         noise = true;
         level = 0.2;
+        break;
+      case "impact":
+        freq = 170;
+        end = 55;
+        duration = 0.08;
+        level = 0.07;
+        noise = true;
+        break;
+      case "charge":
+        freq = 240;
+        end = 900;
+        duration = 0.32;
+        level = 0.14;
+        type = "sine";
+        break;
+      case "sync":
+        freq = 420;
+        end = 1150;
+        duration = 0.32;
+        level = 0.12;
+        type = "sine";
+        break;
+      case "battery":
+        freq = 520;
+        end = 820;
+        duration = 0.18;
+        level = 0.08;
+        type = "sine";
         break;
       case "reload":
         freq = e.weapon === "shotgun" ? 270 : e.weapon === "smg" ? 420 : 330;
@@ -141,10 +174,24 @@ export class Sound {
         level = 0.08;
         break;
       case "laser":
-        freq = 1300;
-        end = 160;
-        duration = 0.25;
+        freq = e.weapon === "sniper" ? 420 : 1300;
+        end = e.weapon === "sniper" ? 38 : 160;
+        duration = e.weapon === "sniper" ? 0.6 : 0.25;
+        noise = e.weapon === "sniper";
         type = "sawtooth";
+        break;
+      case "sniper-spawn":
+        freq = 900;
+        end = 45;
+        duration = 0.7;
+        level = 0.22;
+        noise = true;
+        break;
+      case "sniper-pickup":
+        freq = 280;
+        end = 880;
+        duration = 0.24;
+        type = "sine";
         break;
       case "block":
         freq = 900;

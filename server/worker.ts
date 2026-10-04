@@ -1,5 +1,8 @@
 import { RoomSession } from "./session";
 import type { RoomInfo } from "../shared/game";
+import type { MatchResult, MatchProgress } from "../shared/game";
+import type { CareerData, CareerProfile } from "../shared/career";
+import { CareerStore } from "./career";
 interface Env {
   ROOMS: DurableObjectNamespace;
   LOBBY: DurableObjectNamespace;
@@ -22,6 +25,7 @@ export default {
     if (request.method === "OPTIONS") return json(null);
     if (url.pathname === "/api/health") return json({ ok: true });
     const lobby = env.LOBBY.get(env.LOBBY.idFromName("public"));
+    if (url.pathname.startsWith("/api/career/")) return lobby.fetch(request);
     if (
       url.pathname === "/api/rooms" &&
       ["GET", "POST"].includes(request.method)
@@ -40,10 +44,30 @@ export default {
   },
 };
 export class Lobby {
+  private career = new CareerStore(
+    async () => this.state.storage.get<CareerData>("career-v1"),
+    async (data) => {
+      await this.state.storage.put("career-v1", data);
+    },
+  );
   constructor(private state: DurableObjectState) {}
   async fetch(request: Request) {
     const url = new URL(request.url),
       now = Date.now();
+    if (url.pathname.startsWith("/api/career/"))
+      return this.career.handle(request);
+    if (url.pathname === "/internal/resolve") {
+      const { token } = await request.json<{ token: string }>();
+      return json({ profile: await this.career.resolve(token) });
+    }
+    if (url.pathname === "/internal/settle") {
+      const result = await request.json<MatchResult>();
+      return json({ applied: await this.career.settle(result) });
+    }
+    if (url.pathname === "/internal/progress") {
+      const update = await request.json<MatchProgress>();
+      return json({ applied: await this.career.progress(update) });
+    }
     if (url.pathname === "/update" && request.method === "POST") {
       const info = await request.json<RoomInfo>();
       await this.state.storage.put(info.code, info);
@@ -111,7 +135,43 @@ export class GameRoom {
   }
   async fetch(request: Request): Promise<Response> {
     const code = new URL(request.url).pathname.split("/")[3];
-    this.session ??= new RoomSession(code, () => this.publish());
+    this.session ??= new RoomSession(
+      code,
+      () => this.publish(),
+      async (token) => {
+        const response = await this.env.LOBBY.get(
+          this.env.LOBBY.idFromName("public"),
+        ).fetch(
+          new Request("https://internal/resolve", {
+            method: "POST",
+            body: JSON.stringify({ token }),
+          }),
+        );
+        return (await response.json<{ profile?: CareerProfile }>()).profile;
+      },
+      (result) => {
+        this.state.waitUntil(
+          this.env.LOBBY.get(this.env.LOBBY.idFromName("public"))
+            .fetch(
+              new Request("https://internal/settle", {
+                method: "POST",
+                body: JSON.stringify(result),
+              }),
+            )
+            .then(() => {}),
+        );
+      },
+      (update) => {
+        const write = this.env.LOBBY.get(this.env.LOBBY.idFromName("public"))
+          .fetch(new Request("https://internal/progress", {
+            method: "POST", body: JSON.stringify(update),
+          })).then((response) => {
+            if (!response.ok) throw new Error("Unable to save career progress.");
+          });
+        this.state.waitUntil(write);
+        return write;
+      },
+    );
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
       return json(this.session.game.info(code));
     const pair = new WebSocketPair(),

@@ -15,6 +15,7 @@ export class Controls {
   private dragging = false;
   private keys = new Set<string>();
   private fire = false;
+  private ads = false;
   private pressed = false;
   private seq = 0;
   private actions = { jump: 0, dash: 0, use: 0, swap: 0, reload: 0 };
@@ -40,13 +41,14 @@ export class Controls {
       "mousemove",
       (e) => {
         if (!this.locked || (this.dragMode && !this.dragging)) return;
+        const zoom = this.ads ? (this.weapon === "sniper" ? 4 : this.weapon === "rifle" ? 2 : 1) : 1;
         this.aim =
-          ((this.aim + e.movementX * 0.002 * this.sensitivity + Math.PI * 3) %
+          ((this.aim + e.movementX * 0.002 * this.sensitivity / zoom + Math.PI * 3) %
             (Math.PI * 2)) -
           Math.PI;
         this.pitch = Math.max(
           -1.48,
-          Math.min(1.48, this.pitch - e.movementY * 0.002 * this.sensitivity),
+          Math.min(1.48, this.pitch - e.movementY * 0.002 * this.sensitivity / zoom),
         );
       },
       { signal },
@@ -71,9 +73,11 @@ export class Controls {
             "KeyE",
             "KeyF",
             "KeyR",
+            "KeyZ",
             "Digit1",
             "Digit2",
             "Digit3",
+            "Digit4",
           ].includes(e.code)
         )
           e.preventDefault();
@@ -88,6 +92,7 @@ export class Controls {
         if (e.code === "Digit1") this.weapon = "rifle";
         if (e.code === "Digit2") this.weapon = "smg";
         if (e.code === "Digit3") this.weapon = "shotgun";
+        if (e.code === "Digit4") this.weapon = "sniper";
       },
       { signal },
     );
@@ -97,7 +102,10 @@ export class Controls {
     canvas.addEventListener(
       "mousedown",
       (e) => {
-        if (this.dragMode && e.button === 2) this.dragging = true;
+        if (this.locked && e.button === 2) {
+          this.ads = true;
+          if (this.dragMode) this.dragging = true;
+        }
         if (this.locked && e.button === 0) {
           this.fire = true;
           this.pressed = true;
@@ -109,7 +117,10 @@ export class Controls {
       "mouseup",
       (e) => {
         if (e.button === 0) this.fire = false;
-        if (e.button === 2) this.dragging = false;
+        if (e.button === 2) {
+          this.dragging = false;
+          this.ads = false;
+        }
       },
       { signal },
     );
@@ -140,6 +151,8 @@ export class Controls {
       aim: this.aim,
       pitch: this.pitch,
       fire: this.locked && (this.fire || this.pressed),
+      ads: this.locked && this.ads,
+      charge: this.locked && this.keys.has("KeyZ"),
     };
   }
   sample() {
@@ -152,6 +165,7 @@ export class Controls {
   clear() {
     this.keys.clear();
     this.fire = false;
+    this.ads = false;
     this.pressed = false;
     this.dragging = false;
     this.actions = { ...this.sentActions };

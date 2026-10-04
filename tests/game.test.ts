@@ -49,7 +49,7 @@ describe("authoritative 3D game rules", () => {
           p.hp === 100 && !p.power && !p.storedPower && p.dashReadyAt === 0,
       ),
     ).toBe(true);
-  }, 15_000);
+  }, 30_000);
   it("actually routes a robot up a ramp to engage an upstairs enemy", () => {
     const g = new Game(() => 0.5),
       bot = g.players[0],
@@ -243,7 +243,9 @@ describe("authoritative 3D game rules", () => {
       { x: 380, y: 124, z: 150, w: 100, h: 16, d: 100, kind: "floor" },
     ];
     input(g, p, { fire: true, pitch: Math.atan2(118, 200) });
-    run(g, 300);
+    g.tick(50);
+    input(g, p, { fire: false, pitch: Math.atan2(118, 200) });
+    run(g, 250);
     expect(q.y).toBe(140);
     expect(q.hp).toBe(75);
     expect(

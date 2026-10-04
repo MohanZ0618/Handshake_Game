@@ -18,7 +18,7 @@ import {
 import { Navigation, type Waypoint } from "./navigation";
 export { WIDTH, DEPTH } from "./arena";
 export { RADIUS, SPEED } from "./physics";
-export const PROTOCOL = 3;
+export const PROTOCOL = 6;
 export const TEAMS = [
   { name: "EMBER", color: "#ff765e", letter: "E" },
   { name: "TIDAL", color: "#5bbaff", letter: "T" },
@@ -28,8 +28,12 @@ export const TEAMS = [
 export const ROUND_MS = 90_000,
   BREAK_MS = 5000,
   RESPAWN_MS = 3000,
-  BULLET_SPEED = 820,
+  BULLET_SPEED = 1640,
   FIRE_MS = 150;
+export const SYNC_WINDOW_MS = 3000,
+  SYNC_DURATION_MS = 3000,
+  SYNC_COOLDOWN_MS = 12_000,
+  SYNC_SHIELD = 15;
 export const POWER_TYPES = [
   "double",
   "laser",
@@ -75,6 +79,8 @@ export interface Input {
   aim: number;
   pitch: number;
   fire: boolean;
+  ads: boolean;
+  charge: boolean;
   jump: number;
   dash: number;
   use: number;
@@ -89,6 +95,8 @@ export const idleInput = (): Input => ({
   aim: 0,
   pitch: 0,
   fire: false,
+  ads: false,
+  charge: false,
   jump: 0,
   dash: 0,
   use: 0,
@@ -102,14 +110,25 @@ export interface Player extends Body {
   team: number;
   slot: number;
   bot: boolean;
+  careerId?: string;
+  skin: string | null;
+  tracer: string | null;
   aim: number;
   pitch: number;
+  ads: boolean;
   hp: number;
+  armor: number;
+  battery: boolean;
+  chargeStart: number;
+  chargeLocked: boolean;
+  chargesCompleted: number;
   score: number;
   kills: number;
+  humanKills: number;
   deaths: number;
   respawnAt: number;
   shieldUntil: number;
+  syncUntil: number;
   nextShot: number;
   power: Power | null;
   powerUntil: number;
@@ -133,6 +152,16 @@ export interface Pickup extends Vec3 {
   kind: Power;
   readyAt: number;
 }
+export interface BatteryPickup extends Vec3 {
+  id: number;
+  readyAt: number;
+}
+export interface SniperPickup extends Vec3 {
+  available: boolean;
+  ammo: number;
+  readyAt: number;
+  expiresAt: number;
+}
 export interface Bullet extends Vec3 {
   id: number;
   owner: string;
@@ -144,6 +173,7 @@ export interface Bullet extends Vec3 {
   damage: number;
   weapon: WeaponId;
   shotId: number;
+  tracer: string | null;
 }
 export interface Beam {
   id: number;
@@ -154,6 +184,7 @@ export interface Beam {
   start: Vec3;
   end: Vec3;
   until: number;
+  weapon?: WeaponId;
 }
 export interface Feed {
   id: number;
@@ -178,7 +209,13 @@ export type EventKind =
   | "reload"
   | "empty"
   | "block"
-  | "switch";
+  | "switch"
+  | "impact"
+  | "charge"
+  | "battery"
+  | "sniper-spawn"
+  | "sniper-pickup"
+  | "sync";
 export interface GameEvent extends Vec3 {
   id: number;
   kind: EventKind;
@@ -191,6 +228,7 @@ export interface GameEvent extends Vec3 {
   weapon?: WeaponId;
   mode?: "normal" | "double" | "laser";
   shotId?: number;
+  normal?: Vec3;
 }
 export type Phase = "playing" | "intermission" | "finished";
 export interface Snapshot {
@@ -201,9 +239,12 @@ export interface Snapshot {
   endsAt: number;
   players: Player[];
   pickups: Pickup[];
+  batteries: BatteryPickup[];
+  sniper: SniperPickup;
   bullets: Bullet[];
   beams: Beam[];
   scores: number[];
+  syncReadyAt: number[];
   feed: Feed[];
   events: GameEvent[];
 }
@@ -217,9 +258,37 @@ export interface RoomInfo {
   scores: number[];
   updatedAt: number;
 }
+export interface MatchResult {
+  id: string;
+  players: {
+    careerId: string;
+    name: string;
+    humanKills: number;
+    botKills: number;
+    charges: number;
+    points?: number;
+    won: boolean;
+    qualified: boolean;
+  }[];
+}
+export interface MatchProgress {
+  id: string;
+  careerId: string;
+  points: number;
+  humanKills: number;
+  botKills: number;
+  charges: number;
+}
 export type ClientMessage =
-  | { type: "join"; name: string; team: number; protocol: number }
+  | {
+      type: "join";
+      name: string;
+      team: number;
+      protocol: number;
+      token?: string;
+    }
   | { type: "input"; input: Input }
+  | { type: "leave" }
   | { type: "rematch" };
 export type ServerMessage =
   | {
@@ -230,6 +299,7 @@ export type ServerMessage =
       arena: Arena;
     }
   | { type: "state"; state: Snapshot }
+  | { type: "left" }
   | { type: "error"; message: string };
 export function validName(v: unknown): v is string {
   return typeof v === "string" && /^[A-Za-z0-9 _-]{1,16}$/.test(v.trim());
@@ -244,6 +314,8 @@ export function validInput(v: unknown): v is Input {
     Math.abs(i.aim) <= Math.PI * 4 &&
     Math.abs(i.pitch) <= Math.PI / 2 &&
     typeof i.fire === "boolean" &&
+    typeof i.ads === "boolean" &&
+    typeof i.charge === "boolean" &&
     validWeapon(i.weapon) &&
     [i.seq, i.jump, i.dash, i.use, i.swap, i.reload].every(
       (n) => Number.isSafeInteger(n) && n >= 0,
@@ -251,7 +323,10 @@ export function validInput(v: unknown): v is Input {
   );
 }
 export function movementSpeed(p: Player, now: number) {
-  return SPEED * (p.power === "speed" && p.powerUntil > now ? 1.5 : 1);
+  return SPEED * Math.max(
+    p.power === "speed" && p.powerUntil > now ? 1.5 : 1,
+    p.syncUntil > now ? 1.1 : 1,
+  );
 }
 let defaultNavigation: Navigation | undefined;
 export class Game {
@@ -259,10 +334,13 @@ export class Game {
   navigation: Navigation;
   players: Player[] = [];
   pickups: Pickup[] = [];
+  batteries: BatteryPickup[] = [];
+  sniper: SniperPickup = { x: 1200, y: 0, z: 800, available: true, ammo: 5, readyAt: 0, expiresAt: 0 };
   bullets: Bullet[] = [];
   beams: Beam[] = [];
   events: GameEvent[] = [];
   scores = [0, 0, 0, 0];
+  syncReadyAt = [0, 0, 0, 0];
   feed: Feed[] = [];
   round = 1;
   phase: Phase = "playing";
@@ -276,10 +354,26 @@ export class Game {
     { path: Waypoint[]; nextPath: number; seq: number }
   >();
   private steps = new Map<string, number>();
+  private syncMarks = new Map<string, { victim: string; attacker: string; at: number }>();
+  private impactsThisTick = 0;
+  private careerUpdates = new Set<string>();
+  private careerStats = new Map<
+    string,
+    {
+      name: string;
+      points: number;
+      humanKills: number;
+      botKills: number;
+      charges: number;
+      pvpMs: number;
+    }
+  >();
   constructor(private random: () => number = Math.random) {
     this.navigation = defaultNavigation ??= new Navigation(this.arena);
     for (let i = 0; i < 8; i++) this.players.push(this.makeBot(i));
     this.resetPickups();
+    this.resetBatteries();
+    this.spawnSniper();
   }
   private emit(
     kind: EventKind,
@@ -304,7 +398,20 @@ export class Game {
     });
     return this.events[this.events.length - 1];
   }
+  private impact(p: Vec3, normal: Vec3, owner: string, team: number) {
+    if (this.impactsThisTick++ >= 12) return;
+    this.events.push({
+      id: ++this.serial,
+      kind: "impact",
+      time: this.now,
+      actor: owner,
+      team,
+      ...p,
+      normal,
+    });
+  }
   private spawn(p: Player) {
+    this.clearSyncMarks(p.id);
     const s = this.arena.spawns[p.team];
     Object.assign(p, {
       ...s,
@@ -312,8 +419,14 @@ export class Game {
       vy: 0,
       grounded: true,
       hp: 100,
+      ads: false,
+      armor: 100,
+      battery: false,
+      chargeStart: -1,
+      chargeLocked: false,
       respawnAt: 0,
       shieldUntil: this.now + 1000,
+      syncUntil: 0,
       nextShot: this.now + 350,
       weapon: "rifle",
       ammo: fullAmmo(),
@@ -339,6 +452,8 @@ export class Game {
       team: Math.floor(slot / 2),
       slot,
       bot: true,
+      skin: null,
+      tracer: null,
       x: 0,
       y: 0,
       z: 0,
@@ -346,12 +461,20 @@ export class Game {
       grounded: true,
       aim: 0,
       pitch: 0,
+      ads: false,
       hp: 100,
+      armor: 100,
+      battery: false,
+      chargeStart: -1,
+      chargeLocked: false,
+      chargesCompleted: 0,
       score: 0,
       kills: 0,
+      humanKills: 0,
       deaths: 0,
       respawnAt: 0,
       shieldUntil: 0,
+      syncUntil: 0,
       nextShot: 0,
       power: null,
       powerUntil: 0,
@@ -371,7 +494,13 @@ export class Game {
     this.spawn(p);
     return p;
   }
-  addHuman(id: string, name: string, team: number) {
+  addHuman(
+    id: string,
+    name: string,
+    team: number,
+    careerId?: string,
+    equipped?: { skin: string | null; tracer: string | null },
+  ) {
     if (!validName(name))
       throw new Error(
         "Use 1-16 English letters, numbers, spaces, hyphens or underscores.",
@@ -380,20 +509,39 @@ export class Game {
       throw new Error("Choose a valid team.");
     if (this.players.some((p) => p.id === id))
       throw new Error("Already in this room.");
+    if (careerId && this.players.some((p) => !p.bot && p.careerId === careerId))
+      throw new Error("This career is already in the room.");
     const index = this.players.findIndex((p) => p.team === team && p.bot);
     if (index < 0) throw new Error("This team is full. Choose another team.");
     const p = this.makeBot(index);
+    this.clearSyncMarks(p.id);
     this.bullets = this.bullets.filter((b) => b.owner !== p.id);
     p.id = id;
     p.name = name.trim();
     p.bot = false;
+    p.careerId = careerId;
+    p.skin = equipped?.skin ?? null;
+    p.tracer = equipped?.tracer ?? null;
+    if (careerId && !this.careerStats.has(careerId))
+      this.careerStats.set(careerId, {
+        name: p.name,
+        points: 0,
+        humanKills: 0,
+        botKills: 0,
+        charges: 0,
+        pvpMs: 0,
+      });
     p.aim = Math.atan2(800 - p.z, 1200 - p.x);
     this.players[index] = p;
     return p;
   }
   removeHuman(id: string) {
     const i = this.players.findIndex((p) => p.id === id && !p.bot);
-    if (i >= 0) this.players[i] = this.makeBot(i);
+    if (i >= 0) {
+      this.clearSyncMarks(id);
+      this.dropSniper(this.players[i]);
+      this.players[i] = this.makeBot(i);
+    }
     this.inputs.delete(id);
     this.shotPresses.delete(id);
     this.bullets = this.bullets.filter((b) => b.owner !== id);
@@ -443,9 +591,12 @@ export class Game {
         ammo: { ...p.ammo },
       })),
       pickups: this.pickups.map((p) => ({ ...p })),
+      batteries: this.batteries.map((p) => ({ ...p })),
+      sniper: { ...this.sniper },
       bullets: this.bullets.map((b) => ({ ...b })),
       beams: this.beams.map((b) => ({ ...b })),
       scores: [...this.scores],
+      syncReadyAt: [...this.syncReadyAt],
       feed: [...this.feed],
       events: [...this.events],
     };
@@ -492,18 +643,62 @@ export class Game {
     }
     this.beams = [];
   }
+  private resetBatteries() {
+    this.batteries = this.arena.batteries.map((site, id) => ({
+      ...site,
+      id,
+      readyAt: 0,
+    }));
+  }
+  private spawnSniper() {
+    this.sniper = { x: 1200, y: 0, z: 800, available: true, ammo: 5, readyAt: 0, expiresAt: 0 };
+    this.events.push({ id: ++this.serial, kind: "sniper-spawn", time: this.now,
+      actor: "arena", team: 0, x: 1200, y: 0, z: 800 });
+  }
+  private dropSniper(p: Player) {
+    if (p.ammo.sniper <= 0) return;
+    this.sniper = { x: p.x, y: p.y, z: p.z, available: true,
+      ammo: p.ammo.sniper, readyAt: 0, expiresAt: this.now + 20_000 };
+    p.ammo.sniper = 0;
+    if (p.weapon === "sniper") p.weapon = "rifle";
+  }
+  drainCareerProgress(id: string): MatchProgress[] {
+    const updates = [...this.careerUpdates].map((careerId) => {
+      const stats = this.careerStats.get(careerId)!;
+      return { id, careerId, points: stats.points, humanKills: stats.humanKills,
+        botKills: stats.botKills, charges: stats.charges };
+    });
+    this.careerUpdates.clear();
+    return updates;
+  }
   rematch() {
     if (this.phase !== "finished") return;
+    this.careerStats.clear();
+    this.careerUpdates.clear();
+    for (const p of this.players)
+      if (!p.bot && p.careerId)
+        this.careerStats.set(p.careerId, {
+          name: p.name,
+          points: 0,
+          humanKills: 0,
+          botKills: 0,
+          charges: 0,
+          pvpMs: 0,
+        });
     this.round = 1;
     this.phase = "playing";
     this.endsAt = this.now + ROUND_MS;
     this.scores = [0, 0, 0, 0];
+    this.syncReadyAt = [0, 0, 0, 0];
+    this.syncMarks.clear();
     this.feed = [];
     this.bullets = [];
     this.events = [];
     this.resetPickups();
+    this.resetBatteries();
+    this.spawnSniper();
     for (const p of this.players) {
-      p.score = p.kills = p.deaths = 0;
+      p.score = p.kills = p.humanKills = p.deaths = p.chargesCompleted = 0;
       this.spawn(p);
     }
     this.emit("round", this.players[0]);
@@ -550,6 +745,12 @@ export class Game {
           .sort((a, b) => distance(a, p) - distance(b, p))[0];
         if (supply) goal = supply;
       }
+      if (!p.battery && p.armor < 60) {
+        const battery = this.batteries
+          .filter((q) => !q.readyAt)
+          .sort((a, b) => distance(a, p) - distance(b, p))[0];
+        if (battery) goal = battery;
+      }
       if (p.hp <= 25 && clear) goal = this.arena.spawns[p.team];
       brain.path = this.navigation.path(p, goal);
     }
@@ -584,6 +785,7 @@ export class Game {
       Math.hypot(target.x - p.x, target.z - p.z),
     );
     i.fire = clear && d < 680 && this.random() > 0.18;
+    i.charge = p.battery && (p.armor < 40 || p.hp < 50) && !clear;
     if (
       p.storedPower &&
       !p.power &&
@@ -600,6 +802,34 @@ export class Game {
       i.dash++;
     return i;
   }
+  private clearSyncMarks(id: string) {
+    for (const [key, mark] of this.syncMarks)
+      if (mark.victim === id || mark.attacker === id) this.syncMarks.delete(key);
+  }
+  private syncHit(victim: Player, attacker: Player) {
+    const key = `${victim.id}:${attacker.team}`;
+    const mark = this.syncMarks.get(key);
+    const partner = mark && this.players.find((p) => p.id === mark.attacker);
+    if (
+      mark && partner && partner.hp > 0 && partner.id !== attacker.id &&
+      this.now - mark.at <= SYNC_WINDOW_MS &&
+      this.syncReadyAt[attacker.team] <= this.now
+    ) {
+      for (const p of [partner, attacker]) {
+        p.armor = Math.min(100, p.armor + SYNC_SHIELD);
+        p.syncUntil = this.now + SYNC_DURATION_MS;
+      }
+      this.syncReadyAt[attacker.team] = this.now + SYNC_COOLDOWN_MS;
+      this.syncMarks.delete(key);
+      this.emit("sync", attacker, victim.id, undefined, {
+        x: partner.x, y: partner.y + EYE_HEIGHT, z: partner.z,
+      });
+    } else {
+      this.syncMarks.set(key, {
+        victim: victim.id, attacker: attacker.id, at: this.now,
+      });
+    }
+  }
   hit(
     victim: Player,
     shot: { owner: string; team: number; damage?: number },
@@ -615,7 +845,14 @@ export class Game {
       return false;
     }
     const killer = this.players.find((p) => p.id === shot.owner);
-    victim.hp = Math.max(0, victim.hp - (shot.damage ?? 25));
+    const damage = shot.damage ?? 25;
+    const absorbed = Math.min(victim.armor, damage);
+    victim.armor -= absorbed;
+    victim.hp = Math.max(0, victim.hp - (damage - absorbed));
+    if (victim.chargeStart >= 0) {
+      victim.chargeStart = -1;
+      victim.chargeLocked = true;
+    }
     if (killer)
       this.emit(
         "hit",
@@ -624,17 +861,36 @@ export class Game {
         undefined,
         source ?? { x: killer.x, y: killer.y + EYE_HEIGHT, z: killer.z },
       );
+    if (killer && killer.hp > 0 && damage > 0) this.syncHit(victim, killer);
     if (victim.hp > 0) return true;
+    this.clearSyncMarks(victim.id);
     victim.deaths++;
     victim.respawnAt = this.now + RESPAWN_MS;
     victim.power = null;
+    this.dropSniper(victim);
     victim.storedPower = null;
+    victim.battery = false;
+    victim.chargeStart = -1;
     victim.powerUntil = 0;
+    victim.syncUntil = 0;
     victim.dashUntil = 0;
     victim.reloadUntil = victim.switchUntil = 0;
     this.shotPresses.delete(victim.id);
     if (killer) {
       killer.kills++;
+      if (!killer.bot) {
+        const stats = killer.careerId && this.careerStats.get(killer.careerId);
+        if (victim.bot) {
+          if (stats) stats.botKills++;
+        } else {
+          killer.humanKills++;
+          if (stats) stats.humanKills++;
+        }
+        if (stats) {
+          stats.points++;
+          this.careerUpdates.add(killer.careerId!);
+        }
+      }
       killer.score++;
       this.scores[killer.team]++;
       this.emit("kill", victim, killer.id);
@@ -680,6 +936,7 @@ export class Game {
   }
   private reload(p: Player) {
     if (
+      p.weapon === "sniper" ||
       p.reloadUntil ||
       this.now < p.switchUntil ||
       p.ammo[p.weapon] >= WEAPONS[p.weapon].magazine
@@ -692,6 +949,15 @@ export class Game {
     const config = WEAPONS[p.weapon];
     const eye = { x: p.x, y: p.y + EYE_HEIGHT, z: p.z };
     p.ammo[p.weapon]--;
+    if (p.weapon === "sniper") {
+      const event = this.emit("laser", p);
+      this.fireSniper(p, eye, event.id);
+      if (p.ammo.sniper === 0) {
+        p.weapon = "rifle";
+        this.sniper.readyAt = this.now + 30_000;
+      }
+      return;
+    }
     const event = this.emit(p.power === "laser" ? "laser" : "shot", p);
     event.shotId = event.id;
     event.mode =
@@ -746,6 +1012,7 @@ export class Game {
           damage: config.damage,
           weapon: p.weapon,
           shotId: event.id,
+          tracer: p.tracer,
         });
       }
     }
@@ -779,6 +1046,7 @@ export class Game {
       });
       remaining -= range;
       if (!wall) break;
+      this.impact(wall.point, wall.normal, p.id, p.team);
       const dot =
         dir.x * wall.normal.x + dir.y * wall.normal.y + dir.z * wall.normal.z;
       dir = {
@@ -794,10 +1062,30 @@ export class Game {
       remaining -= 0.1;
     }
   }
+  private fireSniper(p: Player, origin: Vec3, shotId: number) {
+    const aim = p.ads ? p.aim : p.aim + (this.random() - 0.5) * 0.12;
+    const pitch = p.ads ? p.pitch : p.pitch + (this.random() - 0.5) * 0.12;
+    const dir = direction(aim, pitch);
+    const wall = rayWorld(this.arena, origin, dir, WEAPONS.sniper.range);
+    const range = wall?.distance ?? WEAPONS.sniper.range;
+    const hitIds = new Set<string>();
+    let victim = this.nearestVictim(origin, dir, range, p.team, hitIds);
+    while (victim) {
+      hitIds.add(victim.p.id);
+      this.hit(victim.p, { owner: p.id, team: p.team, damage: 200 }, origin);
+      victim = this.nearestVictim(origin, dir, range, p.team, hitIds);
+    }
+    const end = { x: origin.x + dir.x * range, y: origin.y + dir.y * range,
+      z: origin.z + dir.z * range };
+    this.beams.push({ id: ++this.serial, owner: p.id, team: p.team,
+      shotId, segment: 0, start: origin, end, until: this.now + 300, weapon: "sniper" });
+    if (wall) this.impact(wall.point, wall.normal, p.id, p.team);
+  }
   tick(ms: number) {
     const dt = Math.min(100, Math.max(0, ms)),
       start = this.now;
     this.now += dt;
+    this.impactsThisTick = 0;
     this.events = this.events
       .filter((e) => this.now - e.time < 1200)
       .slice(-256);
@@ -807,12 +1095,16 @@ export class Game {
       this.bullets = [];
       this.beams = [];
       this.events = [];
+      this.syncMarks.clear();
+      this.syncReadyAt = [0, 0, 0, 0];
       if (this.phase === "intermission") {
         this.round++;
         this.phase = "playing";
         this.endsAt = this.now + ROUND_MS;
         this.resetPickups();
+        this.resetBatteries();
         for (const p of this.players) this.spawn(p);
+        this.spawnSniper();
       } else {
         this.phase = this.round === 3 ? "finished" : "intermission";
         this.endsAt = this.now + (this.phase === "finished" ? 0 : BREAK_MS);
@@ -820,6 +1112,9 @@ export class Game {
           p.dashUntil = 0;
           p.power = null;
           p.storedPower = null;
+          p.battery = false;
+          p.chargeStart = -1;
+          p.syncUntil = 0;
         }
       }
       this.inputs.clear();
@@ -837,10 +1132,38 @@ export class Game {
       }
     }
     if (this.phase !== "playing") return;
+    if (this.sniper.available && this.sniper.expiresAt && this.now >= this.sniper.expiresAt) {
+      this.sniper.available = false;
+      this.sniper.expiresAt = 0;
+      this.sniper.readyAt = this.now + 30_000;
+    } else if (!this.sniper.available && this.sniper.readyAt && this.now >= this.sniper.readyAt) {
+      this.spawnSniper();
+    }
+    for (const p of this.players)
+      if (
+        !p.bot &&
+        p.careerId &&
+        this.players.some((q) => !q.bot && q.team !== p.team)
+      )
+        this.careerStats.get(p.careerId)!.pvpMs += dt;
     for (const pickup of this.pickups)
       if (pickup.readyAt > 0 && pickup.readyAt <= this.now) {
         pickup.kind = this.randomPower();
         this.placePickup(pickup);
+      }
+    for (const battery of this.batteries)
+      if (battery.readyAt > 0 && battery.readyAt <= this.now) {
+        battery.readyAt = 0;
+        this.events.push({
+          id: ++this.serial,
+          kind: "battery",
+          time: this.now,
+          actor: "arena",
+          team: 0,
+          x: battery.x,
+          y: battery.y + 25,
+          z: battery.z,
+        });
       }
     for (const p of this.players) {
       if (p.hp <= 0) {
@@ -868,6 +1191,31 @@ export class Game {
       p.ack = Math.max(p.ack, i.seq);
       p.aim = i.aim;
       p.pitch = i.pitch;
+      p.ads = i.ads;
+      if (!i.charge) {
+        p.chargeStart = -1;
+        p.chargeLocked = false;
+      } else if (
+        p.battery &&
+        !p.chargeLocked &&
+        (p.hp < 100 || p.armor < 100)
+      ) {
+        if (p.chargeStart < 0) p.chargeStart = this.now;
+        if (this.now - p.chargeStart >= 1500) {
+          p.hp = p.armor = 100;
+          p.battery = false;
+          p.chargeStart = -1;
+          p.chargeLocked = true;
+          p.chargesCompleted++;
+          const stats = p.careerId && this.careerStats.get(p.careerId);
+          if (stats) {
+            stats.charges++;
+            this.careerUpdates.add(p.careerId!);
+          }
+          this.emit("charge", p);
+        }
+      }
+      const charging = p.chargeStart >= 0;
       if (p.powerUntil <= this.now) p.power = null;
       if (actions.use && p.storedPower && !p.power) {
         p.power = p.storedPower;
@@ -879,7 +1227,7 @@ export class Game {
         p.ammo[p.weapon] = WEAPONS[p.weapon].magazine;
         p.reloadUntil = 0;
       }
-      if (i.weapon !== p.weapon) {
+      if (i.weapon !== p.weapon && (i.weapon !== "sniper" || p.ammo.sniper > 0)) {
         p.reloadUntil = 0;
         p.weapon = i.weapon;
         p.switchUntil = this.now + 250;
@@ -889,11 +1237,15 @@ export class Game {
       const previous = { x: p.x, y: p.y, z: p.z };
       const motion = moveBody(
         p,
-        { ...i, jump: actions.jump, dash: actions.dash },
+        {
+          ...i,
+          jump: charging ? false : actions.jump,
+          dash: charging ? false : actions.dash,
+        },
         this.arena,
         dt,
         start,
-        movementSpeed(p, this.now),
+        movementSpeed(p, this.now) * (charging ? 0.35 : 1),
       );
       for (const kind of ["jump", "dash", "land"] as const)
         if (motion[kind]) this.emit(kind, p);
@@ -916,8 +1268,26 @@ export class Game {
           this.emit("pickup", p, undefined, pickup.kind);
           break;
         }
+      for (const battery of this.batteries)
+        if (!battery.readyAt && !p.battery && distance(p, battery) < 40) {
+          p.battery = true;
+          battery.readyAt = this.now + 20_000;
+          this.emit("pickup", p);
+          break;
+        }
+      if (!p.bot && this.sniper.available && p.ammo.sniper === 0 &&
+          distance(p, this.sniper) < 45) {
+        p.ammo.sniper = this.sniper.ammo;
+        p.weapon = "sniper";
+        p.switchUntil = this.now + 250;
+        this.sniper.available = false;
+        this.sniper.readyAt = 0;
+        this.sniper.expiresAt = 0;
+        this.emit("sniper-pickup", p);
+      }
       const pressed = this.shotPresses.delete(p.id);
       if (
+        !charging &&
         (i.fire || pressed) &&
         this.now >= p.nextShot &&
         this.now >= p.switchUntil &&
@@ -925,13 +1295,13 @@ export class Game {
       ) {
         if (p.ammo[p.weapon] <= 0) {
           this.emit("empty", p);
-          this.reload(p);
+          if (p.weapon !== "sniper") this.reload(p);
         } else {
-          const interval =
-            WEAPONS[p.weapon].interval * (p.power === "rapid" ? 0.5 : 1);
+          const interval = WEAPONS[p.weapon].interval *
+            (p.weapon !== "sniper" && p.power === "rapid" ? 0.5 : 1);
           p.nextShot = (p.nextShot < start ? this.now : p.nextShot) + interval;
           this.fire(p);
-          if (p.ammo[p.weapon] === 0) this.reload(p);
+          if (p.weapon !== "sniper" && p.ammo[p.weapon] === 0) this.reload(p);
         }
       }
     }
@@ -983,12 +1353,36 @@ export class Game {
         this.hit(victim.p, b, { x: b.x, y: b.y, z: b.z });
         return false;
       }
-      if (wall) return false;
+      if (wall) {
+        this.impact(wall.point, wall.normal, b.owner, b.team);
+        return false;
+      }
       b.x += dir.x * travel;
       b.y += dir.y * travel;
       b.z += dir.z * travel;
       b.ttl -= dt;
       return b.ttl > 0;
     });
+  }
+  matchResult(id: string): MatchResult {
+    const max = Math.max(...this.scores);
+    return {
+      id,
+      players: this.players
+        .filter((p) => !p.bot && p.careerId)
+        .map((p) => {
+          const stats = this.careerStats.get(p.careerId!)!;
+          return {
+            careerId: p.careerId!,
+            name: p.name,
+            points: stats.points,
+            humanKills: stats.humanKills,
+            botKills: stats.botKills,
+            charges: stats.charges,
+            won: this.scores[p.team] === max,
+            qualified: stats.pvpMs >= 60_000,
+          };
+        }),
+    };
   }
 }

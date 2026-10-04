@@ -1,6 +1,22 @@
 import { it, expect, vi } from "vitest";
 import { RoomSession } from "../server/session";
-import { idleInput } from "../shared/game";
+import { idleInput, PROTOCOL } from "../shared/game";
+it("flushes a player's unfinished points when they leave", () => {
+  const progress = vi.fn();
+  const session = new RoomSession("ABC123", () => {}, async () => undefined, () => {}, progress);
+  const peer = { send: vi.fn(), close: vi.fn() };
+  const player = session.game.addHuman("alpha", "Alpha", 0, "career-alpha");
+  session.peers.set(peer, player.id);
+  const bot = session.game.players.find((p) => p.bot && p.team !== player.team)!;
+  bot.shieldUntil = 0;
+  bot.armor = 0;
+  bot.hp = 10;
+  session.game.hit(bot, { owner: player.id, team: player.team });
+  session.leave(peer);
+  expect(progress).toHaveBeenCalledWith(expect.objectContaining({
+    careerId: "career-alpha", points: 1, botKills: 1,
+  }));
+});
 it("limits input bursts and accepts fresh actions after the next rate window", () => {
   vi.useFakeTimers();
   try {
@@ -8,7 +24,7 @@ it("limits input bursts and accepts fresh actions after the next rate window", (
       peer = { send: vi.fn(), close: vi.fn() };
     session.receive(
       peer,
-      JSON.stringify({ type: "join", protocol: 3, name: "Alpha", team: 0 }),
+      JSON.stringify({ type: "join", protocol: PROTOCOL, name: "Alpha", team: 0 }),
     );
     for (let seq = 1; seq <= 121; seq++)
       session.receive(
@@ -49,7 +65,7 @@ it("broadcasts rematch reset to both peers and ignores requests during play", ()
       peer,
       JSON.stringify({
         type: "join",
-        protocol: 3,
+        protocol: PROTOCOL,
         name: `Player${team}`,
         team,
       }),
@@ -88,7 +104,7 @@ it("replaces a silently disconnected human after fifteen seconds", () => {
       peer = { send: vi.fn(), close: vi.fn() };
     session.receive(
       peer,
-      JSON.stringify({ type: "join", protocol: 3, name: "Alpha", team: 0 }),
+      JSON.stringify({ type: "join", protocol: PROTOCOL, name: "Alpha", team: 0 }),
     );
     expect(session.game.humans).toBe(1);
     vi.advanceTimersByTime(15001);
@@ -105,7 +121,7 @@ it("preserves a short click between simulation ticks", () => {
     peer = { send: vi.fn(), close: vi.fn() };
   session.receive(
     peer,
-    JSON.stringify({ type: "join", protocol: 3, name: "Alpha", team: 0 }),
+    JSON.stringify({ type: "join", protocol: PROTOCOL, name: "Alpha", team: 0 }),
   );
   session.game.now = 2000;
   session.receive(

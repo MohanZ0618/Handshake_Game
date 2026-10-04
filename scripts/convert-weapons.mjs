@@ -15,7 +15,7 @@ globalThis.FileReader = class {
 };
 let compressed = 0;
 for (const id of ["rifle", "smg", "shotgun"]) {
-  const data = await readFile(`public/assets/weapons/${id}.fbx`);
+  const data = await readFile(`assets/legacy-weapons/${id}.fbx`);
   const model = new FBXLoader().parse(
     data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     "",
@@ -38,7 +38,7 @@ for (const id of ["rifle", "smg", "shotgun"]) {
   const box = new THREE.Box3().setFromObject(model);
   console.log(id, box.min.toArray(), box.max.toArray());
   const result = await new GLTFExporter().parseAsync(model, { binary: true });
-  await writeFile(`public/assets/weapons/${id}.glb`, Buffer.from(result));
+  await writeFile(`assets/legacy-weapons/${id}.glb`, Buffer.from(result));
   compressed += gzipSync(Buffer.from(result)).length;
 }
 console.log(`Combined gzip bytes: ${compressed}`);

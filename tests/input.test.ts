@@ -80,19 +80,22 @@ it("only changes the fallback view while the right mouse button is held", () => 
   expect(controls.aim).toBe(0);
   send(canvas, "mousedown", { button: 2 });
   send(doc, "mousemove", { movementX: 100, movementY: 100 });
-  expect(controls.aim).toBeCloseTo(0.2);
-  expect(controls.pitch).toBeCloseTo(-0.2);
+  expect(controls.aim).toBeCloseTo(0.1);
+  expect(controls.pitch).toBeCloseTo(-0.1);
+  expect(controls.current().ads).toBe(true);
   send(doc, "mouseup", { button: 2 });
   send(doc, "mousemove", { movementX: 100, movementY: 100 });
-  expect(controls.aim).toBeCloseTo(0.2);
+  expect(controls.aim).toBeCloseTo(0.1);
+  expect(controls.current().ads).toBe(false);
   controls.dispose();
 });
-it("selects all three weapons and deduplicates held reload keys", () => {
+it("selects all four weapons and deduplicates held reload keys", () => {
   const { controls, doc, send } = setup();
   for (const [code, weapon] of [
     ["Digit2", "smg"],
     ["Digit3", "shotgun"],
     ["Digit1", "rifle"],
+    ["Digit4", "sniper"],
   ]) {
     send(doc, "keydown", { code, repeat: false });
     expect(controls.sample().weapon).toBe(weapon);

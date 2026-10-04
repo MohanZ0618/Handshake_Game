@@ -6,6 +6,7 @@ export function ready(empty = true) {
   const q = g.addHuman("b", "Bravo", 1);
   for (const b of g.players) {
     b.shieldUntil = 0;
+    b.armor = 0;
     if (b.bot) {
       b.hp = 0;
       b.respawnAt = 1e9;
